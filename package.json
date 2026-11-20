@@ -1,0 +1,15 @@
+{
+  "name": "tessera-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter tessera-web dev",
+    "build": "bun run --filter tessera-web build",
+    "test": "bun run --filter tessera-engine test",
+    "typecheck": "bun run --filter '*' typecheck"
+  }
+}
