@@ -140,7 +140,8 @@ export function fromHuggingFace(raw: Config, repo = "", seqLen = 2048): Model {
     const input = x;
     x = b.group(
       label,
-      moe ? "decoder-moe" : "decoder",
+      // One kind for dense and expert layers, so a diff lines them up and reports the swap.
+      "decoder",
       () => {
         let h = norm(input, sandwich ? "Pre-attention norm" : "Attention norm");
         h = attention(h);

@@ -158,6 +158,12 @@ export const OPS: Record<string, OpSpec> = {
     arity: "one",
     infer: ([x]) => ({ shape: [prod(x)], params: 0, flops: 0 }),
   },
+  identity: {
+    category: "reshape",
+    summary: "Passes its input on unchanged. Stands in for imported operations the engine does not model.",
+    arity: "one",
+    infer: ([x]) => ({ shape: [...x], params: 0, flops: 0 }),
+  },
 
   // -- Normalisation and regularisation -------------------------------------
   batchnorm: {
