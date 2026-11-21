@@ -4,7 +4,7 @@ import { ArrowLeftRight, Box, Pencil, Plus, Undo2, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { formatCount } from "tessera-engine";
+import { CATALOG, formatCount } from "tessera-engine";
 import { Mark } from "@/components/brand/mark";
 import { useLab, type PanelName, type SlotIndex } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -66,6 +66,17 @@ export default function Lab() {
   const swap = useLab((state) => state.swap);
   const undo = useLab((state) => state.undo);
   const [dialog, setDialog] = useState<SlotIndex | null>(null);
+
+  // Links like /lab/?a=mistral-7b&b=mixtral-8x7b open a comparison straight away.
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const load = useLab.getState().load;
+    (["a", "b"] as const).forEach((key, index) => {
+      const entry = CATALOG.find((item) => item.id === query.get(key));
+      if (entry) load(index as SlotIndex, entry.build(), entry.name);
+    });
+    if (query.get("view") === "3d") setView("3d");
+  }, [setView]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

@@ -299,12 +299,12 @@ function DenseFan({ from, to }: { from: Stage; to: Stage }) {
 }
 
 /** Frames the whole pipeline once it is laid out: from the front and to one side, so depth and token arcs both read. */
-function FitCamera({ length }: { length: number }) {
+function FitCamera({ length, closer = false }: { length: number; closer?: boolean }) {
   const get = useThree((state) => state.get);
   useEffect(() => {
     const { camera, controls } = get() as unknown as { camera: import("three").PerspectiveCamera; controls: { target: Vector3; update: () => void } | null };
     const span = Math.max(8, length);
-    const distance = (span / 2 / Math.tan((camera.fov * Math.PI) / 360)) * 0.82;
+    const distance = (span / 2 / Math.tan((camera.fov * Math.PI) / 360)) * (closer ? 0.6 : 0.82);
     camera.position.set(length / 2 - distance * 0.16, distance * 0.38, distance * 0.9);
     camera.far = distance * 8 + 100;
     camera.updateProjectionMatrix();
@@ -312,11 +312,11 @@ function FitCamera({ length }: { length: number }) {
       controls.target.set(length / 2, 1, 0);
       controls.update();
     } else camera.lookAt(length / 2, 1, 0);
-  }, [get, length]);
+  }, [get, length, closer]);
   return null;
 }
 
-function Scene({ display, slot, model }: { display: Display; slot: SlotIndex; model: Model }) {
+function Scene({ display, slot, model, compact }: { display: Display; slot: SlotIndex; model: Model; compact: boolean }) {
   const selection = useLab((state) => state.selection);
   const select = useLab((state) => state.select);
   const pass = useRef(0);
@@ -422,7 +422,7 @@ function Scene({ display, slot, model }: { display: Display; slot: SlotIndex; mo
           </Billboard>
         </group>
       ))}
-      <FitCamera length={length} />
+      <FitCamera length={length} closer={compact} />
       {stages.map((stage, index) => (
         <StageView key={stage.item.id} stage={stage} index={index} model={model} pass={pass} selected={selection?.slot === slot && selection.id === stage.item.id} onSelect={() => select({ slot, id: stage.item.id })} />
       ))}
@@ -431,7 +431,7 @@ function Scene({ display, slot, model }: { display: Display; slot: SlotIndex; mo
   );
 }
 
-export default function Graph3D({ slot }: { slot: SlotIndex }) {
+export default function Graph3D({ slot, compact = false }: { slot: SlotIndex; compact?: boolean }) {
   const data = useLab((state) => state.slots[slot]);
   const status = useLab((state) => state.diff?.status[slot]);
   const select = useLab((state) => state.select);
@@ -452,16 +452,16 @@ export default function Graph3D({ slot }: { slot: SlotIndex }) {
   return (
     <div className="relative h-full w-full">
       <Canvas dpr={[1, 2]} camera={{ position: [0, 6, 14], fov: 42, near: 0.05, far: 400 }} onPointerMissed={() => select(null)}>
-        <Scene display={display} slot={slot} model={data.model} />
+        <Scene display={display} slot={slot} model={data.model} compact={compact} />
       </Canvas>
-      <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-line bg-surface/85 px-3 py-2 text-[11.5px] leading-relaxed text-muted backdrop-blur">
+      {!compact && <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-line bg-surface/85 px-3 py-2 text-[11.5px] leading-relaxed text-muted backdrop-blur">
         <p>
           <span className="text-ink">Feature maps</span> stack by channels · <span className="text-[#f0569f]">cones</span> are convolution kernels · <span className="text-ink">dots</span> are neurons
         </p>
         <p>
           <span className="text-ink">Bars</span> are token vectors, arcs are attention · <span className="text-[#f0569f]">dashed arcs</span> are skip connections · drag to orbit, scroll to zoom
         </p>
-      </div>
+      </div>}
     </div>
   );
 }
