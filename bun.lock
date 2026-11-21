@@ -20,6 +20,7 @@
         "react-dom": "^19.2.3",
         "tailwind-merge": "^3.7.1",
         "tessera-engine": "workspace:*",
+        "tessera-lab": "workspace:*",
         "three": "^0.187.0",
         "zustand": "^5.1.0",
       },

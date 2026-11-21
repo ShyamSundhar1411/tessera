@@ -1,0 +1,39 @@
+{
+  "name": "tessera-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "bunx serve out",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
+    "@xyflow/react": "^13.0.2",
+    "clsx": "^2.1.1",
+    "elkjs": "^0.12.1",
+    "lucide-react": "^1.77.0",
+    "next": "^16.2.6",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "tailwind-merge": "^3.7.1",
+    "tessera-engine": "workspace:*",
+    "tessera-lab": "workspace:*",
+    "three": "^0.187.0",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.187.0",
+    "eslint": "^9",
+    "eslint-config-next": "^16.2.6",
+    "tailwindcss": "^4",
+    "typescript": "^5.9.3"
+  }
+}

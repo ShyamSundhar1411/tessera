@@ -1,0 +1,16 @@
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
+
+export default defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  globalIgnores(["node_modules/**", ".next/**", "out/**", "build/**", "public/**", "next-env.d.ts", ".taste-skill/**"]),
+  {
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      // Destructuring `content` out of an object to drop it is intentional.
+      "@typescript-eslint/no-unused-vars": ["warn", { varsIgnorePattern: "^_", ignoreRestSiblings: true }],
+    },
+  },
+]);

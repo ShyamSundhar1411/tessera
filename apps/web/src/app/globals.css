@@ -1,0 +1,132 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+@custom-variant light (&:where(.light, .light *));
+
+/* Dark by default: diagrams of tensors read best on a deep ground. */
+:root {
+  --bg: #0b0d12;
+  --surface: #12151c;
+  --surface-2: #191d26;
+  --surface-3: #222734;
+  --ink: #eef0f5;
+  --muted: #9aa2b4;
+  --line: #262b37;
+  /* Shyam Sundhar's magenta and its gradient. */
+  --accent: #f0569f;
+  --accent-ink: #0b0d12;
+  --brand-from: #e0207f;
+  --brand-to: #f6782a;
+  --added: #3ddc97;
+  --removed: #ff5d6c;
+  --changed: #f7b955;
+  --danger: #ff5d6c;
+  --warn: #f7b955;
+  color-scheme: dark;
+}
+
+.light {
+  --bg: #f4f3ef;
+  --surface: #ffffff;
+  --surface-2: #f2f1ec;
+  --surface-3: #e8e6df;
+  --ink: #17181c;
+  --muted: #62656e;
+  --line: #dedbd2;
+  --accent: #c8106f;
+  --accent-ink: #ffffff;
+  --brand-from: #b8005c;
+  --brand-to: #f2691f;
+  --added: #12a871;
+  --removed: #e03a4e;
+  --changed: #c98400;
+  --danger: #e03a4e;
+  --warn: #b97400;
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-added: var(--added);
+  --color-removed: var(--removed);
+  --color-changed: var(--changed);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --font-sans: var(--font-plex), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+html {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer base {
+  h1,
+  h2,
+  h3 {
+    font-weight: 500;
+    letter-spacing: -0.015em;
+  }
+  h1 {
+    letter-spacing: -0.03em;
+    line-height: 1.06;
+  }
+  h2 {
+    letter-spacing: -0.022em;
+    line-height: 1.15;
+  }
+}
+
+.text-brand {
+  background: linear-gradient(100deg, var(--brand-from), var(--brand-to), var(--brand-from));
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: brand-drift 8s ease-in-out infinite alternate;
+}
+
+@keyframes brand-drift {
+  to {
+    background-position: 100% 0;
+  }
+}
+
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* React Flow on the site's colours. */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--muted);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-connectionline-stroke: var(--accent);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--surface-2);
+  --xy-controls-button-color: var(--ink);
+  --xy-controls-button-border-color: var(--line);
+  --xy-minimap-background-color: var(--surface);
+  --xy-node-boxshadow-selected: 0 0 0 2px var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .text-brand {
+    animation: none;
+  }
+}
