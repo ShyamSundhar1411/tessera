@@ -2,7 +2,7 @@
 
 import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useNodesState, useReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import { ChevronDown, ChevronRight, TriangleExclamationPoint } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCount, type ChangeKind } from "tessera-engine";
 import { buildDisplay, CATEGORY_COLOURS, formatShape, type Display, type DisplayNode } from "@/lib/display";
 import { addNode, connect, disconnect, removeNode } from "@/lib/edit";
@@ -94,13 +94,25 @@ function ContainerNode({ data }: NodeProps<Node<Data>>) {
 
 const nodeTypes = { layer: LayerNode, block: BlockNode, container: ContainerNode };
 
-/** Fits the view once a new layout arrives. */
-function FitOnChange({ token }: { token: string }) {
+/** Fits the view when a new layout arrives, and again when the pane changes size (such as when B opens beside A). */
+function FitOnChange({ token, container }: { token: string; container: React.RefObject<HTMLDivElement | null> }) {
   const { fitView } = useReactFlow();
   useEffect(() => {
     const frame = requestAnimationFrame(() => fitView({ padding: 0.12, maxZoom: 1.1, duration: 250 }));
     return () => cancelAnimationFrame(frame);
   }, [token, fitView]);
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    let last = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (Math.abs(element.clientWidth - last) < 40) return;
+      last = element.clientWidth;
+      fitView({ padding: 0.12, maxZoom: 1.1, duration: 200 });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [container, fitView]);
   return null;
 }
 
@@ -113,6 +125,8 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
   const edit = useLab((state) => state.edit);
   const toggle = useLab((state) => state.toggleExpanded);
   const [display, setDisplay] = useState<Display | null>(null);
+  const container = useRef<HTMLDivElement>(null);
+  const comparing = useLab((state) => !!state.slots[0] && !!state.slots[1]);
 
   useEffect(() => {
     if (!data) return;
@@ -168,6 +182,7 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
   if (!data) return null;
   return (
     <div
+      ref={container}
       className="h-full w-full"
       onDragOver={(event) => {
         if (editing && event.dataTransfer.types.includes("application/x-tessera-op")) event.preventDefault();
@@ -215,10 +230,10 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
         onNodesDelete={(deleted) => edit(slot, (model) => deleted.filter((node) => realIds.has(node.id)).reduce((m, node) => removeNode(m, node.id), model))}
         onEdgesDelete={(deleted) => edit(slot, (model) => deleted.reduce((m, edge) => disconnect(m, edge.source, edge.target), model))}
       >
-        <FitOnChange token={`${data.model.name}|${data.expanded.join(",")}|${display ? "1" : "0"}`} />
+        <FitOnChange container={container} token={`${data.model.name}|${data.expanded.join(",")}|${display ? "1" : "0"}`} />
         <Background gap={22} size={1} color="var(--line)" />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable position="bottom-right" nodeColor={(node) => CATEGORY_COLOURS[(node.data as unknown as Data).category] ?? "#888"} maskColor="color-mix(in srgb, var(--bg) 70%, transparent)" />
+        {!comparing && <MiniMap pannable zoomable position="bottom-right" nodeColor={(node) => CATEGORY_COLOURS[(node.data as unknown as Data).category] ?? "#888"} maskColor="color-mix(in srgb, var(--bg) 70%, transparent)" />}
       </ReactFlow>
     </div>
   );

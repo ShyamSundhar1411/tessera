@@ -300,8 +300,9 @@ function DenseFan({ from, to }: { from: Stage; to: Stage }) {
 
 /** Frames the whole pipeline once it is laid out: from the front and to one side, so depth and token arcs both read. */
 function FitCamera({ length }: { length: number }) {
-  const { camera, controls } = useThree() as unknown as { camera: import("three").PerspectiveCamera; controls: { target: Vector3; update: () => void } | null };
+  const get = useThree((state) => state.get);
   useEffect(() => {
+    const { camera, controls } = get() as unknown as { camera: import("three").PerspectiveCamera; controls: { target: Vector3; update: () => void } | null };
     const span = Math.max(8, length);
     const distance = (span / 2 / Math.tan((camera.fov * Math.PI) / 360)) * 0.82;
     camera.position.set(length / 2 - distance * 0.16, distance * 0.38, distance * 0.9);
@@ -311,7 +312,7 @@ function FitCamera({ length }: { length: number }) {
       controls.target.set(length / 2, 1, 0);
       controls.update();
     } else camera.lookAt(length / 2, 1, 0);
-  }, [camera, controls, length]);
+  }, [get, length]);
   return null;
 }
 
