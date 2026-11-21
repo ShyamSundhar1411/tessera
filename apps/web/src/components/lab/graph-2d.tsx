@@ -1,6 +1,6 @@
 "use client";
 
-import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useNodesState, useReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import { ChevronDown, ChevronRight, TriangleExclamationPoint } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatCount, type ChangeKind } from "tessera-engine";
@@ -127,7 +127,7 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
 
   const realIds = useMemo(() => new Set(data?.model.nodes.map((node) => node.id) ?? []), [data]);
 
-  const nodes: Node<Data>[] = useMemo(
+  const laidOut: Node<Data>[] = useMemo(
     () =>
       (display?.nodes ?? []).map((item) => ({
         id: item.id,
@@ -135,13 +135,20 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
         position: { x: item.x, y: item.y },
         ...(item.parent ? { parentId: item.parent, extent: "parent" as const } : {}),
         ...(item.open ? { style: { width: item.width, height: item.height }, selectable: false, zIndex: -1 } : {}),
-        selected: selection?.slot === slot && selection.id === item.id,
         draggable: !item.open,
         connectable: editing && item.kind === "node",
         data: { ...item, slot, editing, shapeText: data ? formatShape(item.shape, data.model) : "" },
       })),
-    [display, selection, slot, editing, data],
+    [display, slot, editing, data],
   );
+
+  // The layout places every box; dragging one moves it until the model or open blocks change.
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<Data>>([]);
+  useEffect(() => setNodes(laidOut), [laidOut, setNodes]);
+  // Selection made elsewhere (the inspector, the compare list) shows on the canvas without moving anything.
+  useEffect(() => {
+    setNodes((current) => current.map((node) => ({ ...node, selected: selection?.slot === slot && selection.id === node.id })));
+  }, [selection, slot, setNodes]);
 
   const edges: Edge[] = useMemo(
     () =>
@@ -182,6 +189,13 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
     >
       <ReactFlow
         nodes={nodes}
+        onNodesChange={onNodesChange}
+        // Trackpads: two fingers move around, pinch zooms. Mice: drag to move, Ctrl or ⌘ and scroll to zoom.
+        panOnScroll
+        zoomOnScroll={false}
+        zoomOnPinch
+        panOnDrag
+        selectionOnDrag={false}
         edges={edges}
         nodeTypes={nodeTypes}
         minZoom={0.05}
