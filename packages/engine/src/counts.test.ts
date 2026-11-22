@@ -17,6 +17,11 @@ const exact: [string, number][] = [
   ["roberta-base", 124_645_632],
   ["distilbert-base", 66_362_880],
   ["vit-b16", 86_567_656],
+  ["alexnet", 61_100_840],
+  ["squeezenet", 1_248_424],
+  ["googlenet", 6_624_904],
+  ["densenet121", 7_978_856],
+  ["unet", 31_037_698],
 ];
 
 const close: [string, number, number?][] = [

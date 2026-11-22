@@ -100,7 +100,7 @@ export function shrinkLanguageModel(model: Model, options: ShrinkOptions = {}): 
   });
 
   // Share the layer budget across the repeated blocks, at least one of each kind.
-  const repeated = model.groups.filter((group) => (group.repeat ?? 1) >= 1 && !group.parent);
+  const repeated = model.groups.filter((group) => (group.repeat ?? 1) > 1 && !group.parent);
   const total = repeated.reduce((sum, group) => sum + (group.repeat ?? 1), 0) || 1;
   const budget = Math.max(repeated.length, options.layers ?? 4);
   let left = budget;

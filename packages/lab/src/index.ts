@@ -29,8 +29,32 @@ export {
   type ClassScores,
   type Stats,
   type RunMetric,
+  type CompareMetric,
+  type RunSummary,
   type MetricComparison,
 } from "./train/metrics";
+export { buildGraph, GraphError, type GraphModel, type GraphOptions, type ApplyOptions } from "./train/graph";
+export {
+  prepareForTraining,
+  planTraining,
+  loadTaskData,
+  loadShakespeare,
+  encodeChars,
+  decodeChars,
+  CHAR_VOCAB,
+  CHAR_MASK,
+  SYMBOLS,
+  SHAKESPEARE_URL,
+  type TaskKind,
+  type TaskSpec,
+  type InputRole,
+  type PreparedModel,
+  type PrepareResult,
+  type PrepareOptions,
+  type TaskData,
+  type TokenSplit,
+} from "./train/tasks";
+export { trainCompareAny, planCompare, TaskMismatchError, type AnyTrainOptions, type AnyTrainEvent, type AnyModelResult, type AnyTrainResult } from "./train/trainAny";
 export { PRETRAINED, IMAGENET_LABELS, labelsFor, pretrainedEntry, type PretrainedEntry, type InputSpec } from "./run/registry";
 export { classify, loadSession, releaseSession, type ClassifyResult, type ClassifyProgress, type Prediction, type ClassifiableImage } from "./run/classify";
 export { cropRect, toNchw, softmax, topK } from "./run/preprocess";

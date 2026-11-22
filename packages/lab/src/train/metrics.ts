@@ -20,6 +20,10 @@ export interface Evaluation {
   /** Rows are the true class, columns the predicted class. */
   confusion: number[][];
   examples: number;
+  /** exp(mean loss per token), for tasks scored per token (language modelling, masked tokens, seq2seq). */
+  perplexity?: number;
+  /** seq2seq only: share of test sequences produced entirely right. */
+  sequenceAccuracy?: number;
 }
 
 /** Counts how often each true class (row) was predicted as each class (column). */
@@ -97,13 +101,16 @@ export function stats(values: number[]): Stats {
 /** The final metrics summarised across seeds. */
 export type RunMetric = "loss" | "accuracy" | "errorRate" | "macroF1";
 export const RUN_METRICS: RunMetric[] = ["loss", "accuracy", "errorRate", "macroF1"];
-const HIGHER_IS_BETTER: Record<RunMetric, boolean> = { loss: false, accuracy: true, errorRate: false, macroF1: true };
+const HIGHER_IS_BETTER: Record<CompareMetric, boolean> = { loss: false, accuracy: true, errorRate: false, macroF1: true, perplexity: false };
 
 export const metricOf = (evaluation: Evaluation, metric: RunMetric): number =>
   metric === "macroF1" ? evaluation.macro.f1 : evaluation[metric];
 
+/** Perplexity joins the run metrics for tasks scored per token. */
+export type CompareMetric = RunMetric | "perplexity";
+
 export interface MetricComparison {
-  metric: RunMetric;
+  metric: CompareMetric;
   meanA: number;
   meanB: number;
   /** meanB - meanA. */
@@ -119,14 +126,19 @@ export interface MetricComparison {
   test: "mean gap > stdA + stdB";
 }
 
+/** A summary of final metrics across seeds; perplexity is present only for per-token tasks. */
+export type RunSummary = Record<RunMetric, Stats> & { perplexity?: Stats };
+
 /**
  * Compares two models' final metrics across seeds. Takes anything with a
  * `summary` of per-metric stats, such as a model's training result.
+ * Perplexity is compared too when both summaries have it.
  */
-export function compareRuns(a: { summary: Record<RunMetric, Stats> }, b: { summary: Record<RunMetric, Stats> }): MetricComparison[] {
-  return RUN_METRICS.map((metric) => {
-    const sa = a.summary[metric];
-    const sb = b.summary[metric];
+export function compareRuns(a: { summary: RunSummary }, b: { summary: RunSummary }): MetricComparison[] {
+  const metrics: CompareMetric[] = a.summary.perplexity && b.summary.perplexity ? [...RUN_METRICS, "perplexity"] : RUN_METRICS;
+  return metrics.map((metric) => {
+    const sa = a.summary[metric]!;
+    const sb = b.summary[metric]!;
     const difference = sb.mean - sa.mean;
     const better = difference === 0 ? "tie" : (difference > 0) === HIGHER_IS_BETTER[metric] ? "b" : "a";
     const beyondNoise = sa.n < 2 || sb.n < 2 ? null : Math.abs(difference) > sa.std + sb.std;

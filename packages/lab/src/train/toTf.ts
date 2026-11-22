@@ -217,7 +217,7 @@ export function buildTf(model: Model, options: TfOptions = {}): TfBuild {
 export const toChannelsLast = ([c, h, w]: Shape): Shape => [h, w, c];
 
 /** The repeated block (repeat > 1) furthest out that holds `group` and sits inside `scope`. */
-function outermostRepeated(groups: Group[], group: string | undefined, scope: string | undefined): Group | undefined {
+export function outermostRepeated(groups: Group[], group: string | undefined, scope: string | undefined): Group | undefined {
   let found: Group | undefined;
   const seen = new Set<string>();
   let id = group;
@@ -231,7 +231,7 @@ function outermostRepeated(groups: Group[], group: string | undefined, scope: st
   return found;
 }
 
-function isWithin(groups: Group[], group: string | undefined, ancestor: string): boolean {
+export function isWithin(groups: Group[], group: string | undefined, ancestor: string): boolean {
   const seen = new Set<string>();
   let id = group;
   while (id && !seen.has(id)) {

@@ -117,7 +117,7 @@ const HELPERS: Record<string, string> = {
         self.gated = act in ("swiglu", "geglu")
         self.act = F.silu if act == "swiglu" else F.gelu if act in ("geglu", "gelu") else F.relu
         self.up = nn.Linear(dim, hidden, bias=bias)
-        self.gate = nn.Linear(dim, hidden, bias=bias) if self.gated else None
+        self.gate = nn.Linear(dim, hidden, bias=False) if self.gated else None
         self.down = nn.Linear(hidden, dim, bias=bias)
 
     def forward(self, x):
@@ -217,9 +217,11 @@ function moduleFor(node: Node, ctx: Ctx): string | null {
     case "dropout":
       return `nn.Dropout(${num(a.rate, 0.1)})`;
     case "maxpool":
-      return `nn.MaxPool2d(kernel_size=${num(a.k, 2)}, stride=${num(a.s, num(a.k, 2))}, padding=${num(a.p, 0)})`;
+      return `nn.MaxPool2d(kernel_size=${num(a.k, 2)}, stride=${num(a.s, num(a.k, 2))}, padding=${num(a.p, 0)}${a.ceil === true || a.ceil === "true" ? ", ceil_mode=True" : ""})`;
     case "avgpool":
-      return `nn.AvgPool2d(kernel_size=${num(a.k, 2)}, stride=${num(a.s, num(a.k, 2))}, padding=${num(a.p, 0)})`;
+      return `nn.AvgPool2d(kernel_size=${num(a.k, 2)}, stride=${num(a.s, num(a.k, 2))}, padding=${num(a.p, 0)}${a.ceil === true || a.ceil === "true" ? ", ceil_mode=True" : ""})`;
+    case "upconv2d":
+      return `nn.ConvTranspose2d(${input[0]}, ${a.out}, kernel_size=${num(a.k, 2)}, stride=${num(a.s, 2)}, padding=${num(a.p, 0)}, bias=${bool(a.bias ?? true)})`;
     case "linear":
       return `nn.Linear(${features}, ${a.out}, bias=${bool(a.bias ?? true)})`;
     case "embedding":

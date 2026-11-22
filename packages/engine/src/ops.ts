@@ -56,7 +56,13 @@ const sequence = (shape: Shape, op: string): [number, number] => {
   if (shape.length !== 2) throw new ShapeError(`${op} needs a sequence-shaped input [seq, features], got [${shape.join(", ")}]`);
   return shape as [number, number];
 };
-const spatial = (size: number, k: number, s: number, p: number, d = 1) => Math.floor((size + 2 * p - d * (k - 1) - 1) / s) + 1;
+const spatial = (size: number, k: number, s: number, p: number, d = 1, ceil = false) => {
+  const out = (size + 2 * p - d * (k - 1) - 1) / s + 1;
+  // Ceil mode (GoogLeNet, SqueezeNet) rounds up, but never starts a window entirely in the padding.
+  if (!ceil) return Math.floor(out);
+  const up = Math.ceil(out);
+  return (up - 1) * s >= size + p ? up - 1 : up;
+};
 
 /** Last-dimension size, the feature size for both sequences and flat vectors. */
 const features = (shape: Shape) => shape[shape.length - 1];
@@ -100,6 +106,24 @@ export const OPS: Record<string, OpSpec> = {
       return { shape: [out, oh, ow], params: weights + (bias ? out : 0), flops: 2 * weights * oh * ow };
     },
   },
+  upconv2d: {
+    category: "conv",
+    summary: "Transposed convolution: learns to enlarge an image, the way U-Net's decoder climbs back to full size.",
+    arity: "one",
+    main: "out",
+    infer: ([x], args) => {
+      const [c, h, w] = image(x, "upconv2d");
+      const out = num(args, "out");
+      const k = num(args, "k", 2);
+      const s = num(args, "s", 2);
+      const p = num(args, "p", 0);
+      const bias = flag(args, "bias", true);
+      const weights = c * out * k * k;
+      const oh = (h - 1) * s - 2 * p + k;
+      const ow = (w - 1) * s - 2 * p + k;
+      return { shape: [out, oh, ow], params: weights + (bias ? out : 0), flops: 2 * weights * h * w };
+    },
+  },
   maxpool: {
     category: "pool",
     summary: "Keeps the largest value in each window, shrinking the image.",
@@ -110,7 +134,8 @@ export const OPS: Record<string, OpSpec> = {
       const k = num(args, "k", 2);
       const s = num(args, "s", k);
       const p = num(args, "p", 0);
-      const shape = [c, spatial(h, k, s, p), spatial(w, k, s, p)];
+      const ceil = flag(args, "ceil", false);
+      const shape = [c, spatial(h, k, s, p, 1, ceil), spatial(w, k, s, p, 1, ceil)];
       return { shape, params: 0, flops: prod(shape) * k * k };
     },
   },
@@ -124,7 +149,8 @@ export const OPS: Record<string, OpSpec> = {
       const k = num(args, "k", 2);
       const s = num(args, "s", k);
       const p = num(args, "p", 0);
-      const shape = [c, spatial(h, k, s, p), spatial(w, k, s, p)];
+      const ceil = flag(args, "ceil", false);
+      const shape = [c, spatial(h, k, s, p, 1, ceil), spatial(w, k, s, p, 1, ceil)];
       return { shape, params: 0, flops: prod(shape) * k * k };
     },
   },
