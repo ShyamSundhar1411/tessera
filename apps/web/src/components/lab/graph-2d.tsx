@@ -3,11 +3,12 @@
 import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useNodesState, useReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import { ChevronDown, ChevronRight, TriangleExclamationPoint } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatCount, type ChangeKind } from "tessera-engine";
+import { formatCount, OPS, type ChangeKind, type Model } from "tessera-engine";
 import { buildDisplay, CATEGORY_COLOURS, formatShape, type Display, type DisplayNode } from "@/lib/display";
 import { addNode, connect, connectionEnd, disconnect, removeNode } from "@/lib/edit";
 import { useLab, type SlotIndex } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { OpGlyph } from "./op-glyph";
 
 const STATUS_RING: Record<ChangeKind, string> = {
   same: "",
@@ -18,62 +19,116 @@ const STATUS_RING: Record<ChangeKind, string> = {
 
 type Data = DisplayNode & { slot: SlotIndex; shapeText: string; editing: boolean } & Record<string, unknown>;
 
+const HANDLE = "!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100";
+
+/** A causal attention layer draws its masked triangle; others draw a full matrix. */
+const isCausal = (model: Model | undefined, id: string) => {
+  const node = model?.nodes.find((item) => item.id === id);
+  return !node || node.args.causal === undefined ? model?.kind === "language" : node.args.causal === true || node.args.causal === "true";
+};
+
 function LayerNode({ data, selected }: NodeProps<Node<Data>>) {
   const colour = CATEGORY_COLOURS[data.category];
+  const model = useLab((state) => state.slots[data.slot]?.model);
   return (
     <div
       className={cn(
-        "group relative flex h-[58px] w-[210px] items-stretch rounded-lg border border-line bg-surface text-left shadow-sm",
+        "group relative flex h-[58px] w-[210px] items-center gap-2 rounded-xl border border-line bg-gradient-to-br from-surface to-surface-2 pr-2.5 pl-1.5 text-left shadow-sm transition-colors hover:border-muted",
         data.status && STATUS_RING[data.status],
-        selected && "border-accent",
+        selected && "border-accent shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_20%,transparent)]",
         data.error && "border-danger",
       )}
     >
-      <Handle type="target" position={Position.Top} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
-      <span className="w-1.5 flex-none rounded-l-lg" style={{ background: colour }} />
-      <div className="min-w-0 flex-1 px-2.5 py-1.5">
+      <Handle type="target" position={Position.Top} className={HANDLE} />
+      <div className="size-[44px] flex-none rounded-lg p-0.5" style={{ background: `color-mix(in oklab, ${colour} 13%, transparent)` }}>
+        <OpGlyph op={data.op} shape={data.shape} colour={colour} causal={isCausal(model, data.id)} />
+      </div>
+      <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[12.5px] font-medium">{data.label}</span>
           {data.error && <TriangleExclamationPoint className="size-3.5 flex-none text-danger" />}
         </div>
-        <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10.5px] text-muted">
-          <span className="truncate">{data.op !== data.label ? data.op : ""} {data.shapeText && `→ ${data.shapeText}`}</span>
+        <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted">{data.shapeText && `→ ${data.shapeText}`}</div>
+        <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted">
+          <span className="truncate" style={{ color: colour }}>{data.op !== data.label ? data.op : ""}</span>
           {data.params > 0 && <span className="flex-none">{formatCount(data.params)}</span>}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
+      <Handle type="source" position={Position.Bottom} className={HANDLE} />
     </div>
   );
 }
 
+/** What a block is made of, most telling first: attention, then convolution, then the rest. */
+const RANK = ["attention", "embedding", "conv", "mlp", "linear", "merge", "pool", "norm", "activation"];
+
 function BlockNode({ data, selected }: NodeProps<Node<Data>>) {
   const toggle = useLab((state) => state.toggleExpanded);
+  const model = useLab((state) => state.slots[data.slot]?.model);
+  const members = useMemo(() => {
+    if (!model) return [];
+    const within = (groupId: string | undefined): boolean => {
+      for (let g = groupId; g; g = model.groups.find((group) => group.id === g)?.parent) if (g === data.id) return true;
+      return false;
+    };
+    return model.nodes.filter((node) => within(node.group));
+  }, [model, data.id]);
+  const lead = [...members].sort((a, b) => {
+    const rank = (op: string) => {
+      const index = RANK.indexOf(OPS[op]?.category ?? "");
+      return index < 0 ? 99 : index;
+    };
+    return rank(a.op) - rank(b.op);
+  })[0];
+  const leadColour = lead ? CATEGORY_COLOURS[OPS[lead.op]?.category ?? "block"] : CATEGORY_COLOURS.block;
+  const residual = members.some((node) => node.op === "add");
   return (
-    <div
-      className={cn(
-        "group relative flex h-[66px] w-[230px] items-center gap-2 rounded-xl border border-line bg-surface-2 px-3 text-left",
-        data.status && STATUS_RING[data.status],
-        selected && "border-accent",
+    <div className="group relative h-[66px] w-[230px]">
+      {/* A repeated block shows its copies stacked behind it. */}
+      {data.repeat > 1 && (
+        <>
+          <div className="absolute inset-0 translate-x-[8px] translate-y-[8px] rounded-xl border border-line bg-surface-2/50" />
+          <div className="absolute inset-0 translate-x-[4px] translate-y-[4px] rounded-xl border border-line bg-surface-2/80" />
+        </>
       )}
-    >
-      <Handle type="target" position={Position.Top} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
-      <button type="button" onClick={() => toggle(data.slot, data.id)} className="grid size-7 flex-none place-items-center rounded-md border border-line bg-surface text-muted hover:text-ink" aria-label="Open block">
-        <ChevronRight className="size-4" />
-      </button>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-[13px] font-medium">{data.label}</span>
-          {data.repeat > 1 && <span className="flex-none rounded bg-accent/15 px-1.5 font-mono text-[11px] text-accent">×{data.repeat}</span>}
+      <div
+        className={cn(
+          "relative flex h-full items-center gap-2 overflow-hidden rounded-xl border border-line bg-gradient-to-br from-surface-2 to-surface-3 pr-3 pl-1.5 text-left transition-colors hover:border-muted",
+          data.status && STATUS_RING[data.status],
+          selected && "border-accent",
+        )}
+      >
+        <div className="relative size-[46px] flex-none rounded-lg p-0.5" style={{ background: `color-mix(in oklab, ${leadColour} 14%, transparent)` }}>
+          <OpGlyph op={lead?.op} shape={data.shape} colour={leadColour} causal={lead ? isCausal(model, lead.id) : true} />
+          {residual && (
+            <svg viewBox="0 0 46 46" className="absolute inset-0" aria-hidden>
+              <path d="M3 40 C -2 10, 48 10, 43 40" fill="none" stroke="var(--accent)" strokeWidth="1.6" strokeDasharray="3 2" />
+            </svg>
+          )}
         </div>
-        <div className="mt-0.5 flex justify-between gap-2 font-mono text-[10.5px] text-muted">
-          <span className="truncate">
-            {data.size} layers {data.shapeText && `→ ${data.shapeText}`}
-          </span>
-          <span className="flex-none">{formatCount(data.params)}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[13px] font-semibold">{data.label}</span>
+            {data.repeat > 1 && <span className="flex-none rounded bg-accent/15 px-1.5 font-mono text-[11px] text-accent">×{data.repeat}</span>}
+          </div>
+          <div className="mt-0.5 flex justify-between gap-2 font-mono text-[10.5px] text-muted">
+            <span className="truncate">{data.shapeText && `→ ${data.shapeText}`}</span>
+            <span className="flex-none">{formatCount(data.params)}</span>
+          </div>
+          {/* Its layers in order, one segment each, in their colours. */}
+          <div className="mt-1 flex h-1.5 gap-px overflow-hidden rounded-full" title={members.map((node) => node.label ?? node.op).join(" → ")}>
+            {members.map((node) => (
+              <span key={node.id} className="flex-1" style={{ background: CATEGORY_COLOURS[OPS[node.op]?.category ?? "block"] }} />
+            ))}
+          </div>
         </div>
+        <button type="button" onClick={() => toggle(data.slot, data.id)} className="grid size-6 flex-none place-items-center rounded-md border border-line bg-surface text-muted hover:text-ink" aria-label="Open block">
+          <ChevronRight className="size-3.5" />
+        </button>
+        {data.error && <TriangleExclamationPoint className="size-3.5 flex-none text-danger" />}
       </div>
-      {data.error && <TriangleExclamationPoint className="size-3.5 flex-none text-danger" />}
-      <Handle type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
+      <Handle type="target" position={Position.Top} className={HANDLE} />
+      <Handle type="source" position={Position.Bottom} className={HANDLE} />
     </div>
   );
 }
