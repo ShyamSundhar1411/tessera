@@ -44,6 +44,8 @@ export interface GraphModel {
   endsInSoftmax: boolean;
   /** Everything the optimiser updates. */
   trainable: tf.Variable[];
+  /** Values that are not trained but are part of the model: batch norm's running mean and variance. */
+  state: tf.Variable[];
   /** Which engine node each trainable variable belongs to (by variable name). Copies of a repeated block map to the one node. */
   nodeOfVariable: Map<string, string>;
   /** Total trainable values; equals analyze(model).params. */
@@ -587,6 +589,7 @@ export function buildGraph(model: Model, options: GraphOptions = {}): GraphModel
     outputShape: shapeOf(outputNode.id),
     endsInSoftmax: outputNode.op === "softmax",
     trainable,
+    state: [...params.values()].flatMap((p) => Object.values(p.state)),
     nodeOfVariable,
     paramCount,
     apply,

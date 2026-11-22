@@ -23,7 +23,7 @@ export interface SafeTensor {
   data: Float32Array;
 }
 
-/** Reads a safetensors file: an 8-byte header length, a JSON header, then the raw tensors. F32 only. */
+/** Reads a safetensors file: an 8-byte header length, a JSON header, then the raw tensors. Only F32 tensors are kept. */
 export function parseSafetensors(buffer: ArrayBuffer): Map<string, SafeTensor> {
   const view = new DataView(buffer);
   const length = Number(view.getBigUint64(0, true));
@@ -32,7 +32,8 @@ export function parseSafetensors(buffer: ArrayBuffer): Map<string, SafeTensor> {
   const out = new Map<string, SafeTensor>();
   for (const [name, entry] of Object.entries(header)) {
     if (name === "__metadata__") continue;
-    if (entry.dtype !== "F32") throw new Error(`${name} is ${entry.dtype}; only F32 is read`);
+    // Integer bookkeeping such as batch norm's num_batches_tracked is not needed to run a model.
+    if (entry.dtype !== "F32") continue;
     const [from, to] = entry.data_offsets;
     // Copied, because the offset is not always a multiple of 4.
     out.set(name, { shape: entry.shape, data: new Float32Array(buffer.slice(start + from, start + to)) });
@@ -41,7 +42,7 @@ export function parseSafetensors(buffer: ArrayBuffer): Map<string, SafeTensor> {
 }
 
 /** Downloads a file once and keeps it in the browser's cache storage, reporting progress. */
-async function fetchCached(url: string, onProgress?: (loaded: number, total: number) => void): Promise<Response> {
+export async function fetchCached(url: string, onProgress?: (loaded: number, total: number) => void): Promise<Response> {
   const cache = typeof caches !== "undefined" ? await caches.open(CACHE).catch(() => null) : null;
   const hit = await cache?.match(url);
   if (hit) return hit;
@@ -113,9 +114,9 @@ export function gpt2Assignments(tensors: Map<string, SafeTensor>, layers: number
   return out;
 }
 
-/** Copies weights into a built graph; every trainable variable must get one, with the same shape. */
+/** Copies weights into a built graph; every variable (trained, and state such as running statistics) must get one, with the same shape. */
 export function assignWeights(graph: GraphModel, weights: Map<string, SafeTensor>): void {
-  for (const variable of graph.trainable) {
+  for (const variable of [...graph.trainable, ...graph.state]) {
     // Names are "<build prefix>/<step key>/<part>".
     const key = variable.name.split("/").slice(1).join("/");
     const tensor = weights.get(key);

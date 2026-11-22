@@ -58,5 +58,6 @@ export { trainCompareAny, planCompare, TaskMismatchError, type AnyTrainOptions, 
 export { PRETRAINED, IMAGENET_LABELS, labelsFor, pretrainedEntry, type PretrainedEntry, type InputSpec } from "./run/registry";
 export { classify, loadSession, releaseSession, type ClassifyResult, type ClassifyProgress, type Prediction, type ClassifiableImage } from "./run/classify";
 export { cropRect, toNchw, softmax, topK } from "./run/preprocess";
-export { loadGpt2, nextTokenLogits, gpt2Model, gpt2Assignments, assignWeights, parseSafetensors, GPT2_FILES, GPT2_BYTES, type Gpt2, type Gpt2Progress, type SafeTensor } from "./run/gpt2";
+export { loadGpt2, nextTokenLogits, fetchCached, gpt2Model, gpt2Assignments, assignWeights, parseSafetensors, GPT2_FILES, GPT2_BYTES, type Gpt2, type Gpt2Progress, type SafeTensor } from "./run/gpt2";
 export { Gpt2Tokenizer } from "./run/bpe";
+export { loadVisionWeights, resnetAssignments, VISION_WEIGHTS, IMAGENET_NORMALIZE, type VisionWeights, type LoadedVision } from "./run/torchvision";

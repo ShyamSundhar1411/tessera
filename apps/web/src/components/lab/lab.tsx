@@ -56,8 +56,8 @@ function ModelChip({ slot, onLoad }: { slot: SlotIndex; onLoad: () => void }) {
         <span className="grid size-5 flex-none place-items-center rounded-full text-[10.5px] font-semibold text-[#0b0d12]" style={{ background: SLOT_COLOURS[slot] }}>
           {slot ? "B" : "A"}
         </span>
-        <span className="max-w-[110px] truncate font-medium sm:max-w-[180px]">{data.model.name}</span>
-        <span className="font-mono text-[11px] text-muted">{formatCount(data.analysis.params)}</span>
+        <span className="max-w-[78px] truncate font-medium sm:max-w-[180px]">{data.model.name}</span>
+        <span className="hidden font-mono text-[11px] text-muted sm:inline">{formatCount(data.analysis.params)}</span>
         {data.analysis.errors.length > 0 && <span className="size-1.5 rounded-full bg-danger" title={`${data.analysis.errors.length} problem(s)`} />}
       </button>
       <button type="button" onClick={() => clear(slot)} aria-label={`Remove ${slot ? "B" : "A"}`} className="grid size-6 place-items-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
@@ -128,7 +128,13 @@ function Design({ onLoad }: { onLoad: (slot: SlotIndex) => void }) {
           <Palette />
         </div>
       )}
-      <div className={cn("grid min-h-0 min-w-0 flex-1", shown.length === 2 && "grid-rows-2 md:grid-cols-2 md:grid-rows-1")}>
+      <div className={cn("relative grid min-h-0 min-w-0 flex-1", shown.length === 2 && "grid-rows-2 md:grid-cols-2 md:grid-rows-1")}>
+        {/* On phones the canvas tools float over the canvas instead of crowding the top bar. */}
+        {shown.length > 0 && (
+          <div className="absolute top-3 right-3 z-20 rounded-xl bg-surface/90 p-1 backdrop-blur md:hidden">
+            <DesignTools />
+          </div>
+        )}
         {shown.map((index) => (
           <section key={index} onPointerDown={() => setActive(index)} className={cn("relative min-h-0", index === 1 && "border-t border-line md:border-t-0 md:border-l")}>
             {shown.length === 2 && (
@@ -230,11 +236,12 @@ export default function Lab() {
           slots[0] && (
             <button type="button" onClick={() => setDialog(1)} className="flex flex-none items-center gap-1 rounded-full border border-dashed border-line px-3 py-1 text-[12.5px] text-muted hover:border-muted hover:text-ink">
               <Plus className="size-3.5" />
-              Compare with another
+              <span className="hidden sm:inline">Compare with another</span>
+              <span className="sm:hidden">Compare</span>
             </button>
           )
         )}
-        <div className="ml-auto flex-none pl-2">{mode === "design" && loaded && <DesignTools />}</div>
+        <div className="ml-auto hidden flex-none pl-2 md:block">{mode === "design" && loaded && <DesignTools />}</div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col-reverse md:flex-row">

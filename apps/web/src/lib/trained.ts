@@ -1,11 +1,12 @@
 "use client";
 
-import type { Model } from "tessera-engine";
+import { CATALOG, toText, type Model } from "tessera-engine";
 import type { Gpt2Progress, Gpt2Tokenizer, GraphModel, PreparedModel } from "tessera-lab";
 import { create } from "zustand";
 
 // Weights for the model in each slot that the trace and run views can use:
-// a model the Train tab finished training, or real published weights (GPT-2).
+// a model the Train tab finished training, or real published weights (GPT-2,
+// torchvision's ResNets).
 // Only valid while that slot still holds the same model object.
 
 export interface Trained {
@@ -16,6 +17,9 @@ export interface Trained {
   kind: "trained" | "pretrained";
   /** For real language models: their own tokenizer instead of characters. */
   tokenizer?: Gpt2Tokenizer;
+  /** For real image models: the input normalisation they were trained with, and their class names. */
+  normalize?: { mean: number[]; std: number[] };
+  labels?: string[];
 }
 
 interface TrainedState {
@@ -62,4 +66,33 @@ export async function loadRealGpt2(slot: 0 | 1, model: Model, onProgress: (progr
     roles: { [gpt2.graph.inputs[0].id]: "tokens" },
   };
   useTrained.getState().keep(slot, { source: model, graph: gpt2.graph, prepared, kind: "pretrained", tokenizer: gpt2.tokenizer });
+}
+
+/** Catalog image models whose published weights load into the graph. */
+const VISION_IDS = ["resnet18", "resnet50"];
+/** Download sizes in megabytes, for the button. */
+export const VISION_SIZES: Record<string, number> = { resnet18: 47, resnet50: 102 };
+
+/** The catalog id of an unedited image model with published weights, if this is one. */
+export function visionWeightsId(model: Model | undefined) {
+  if (!model) return undefined;
+  const text = toText(model);
+  return VISION_IDS.find((id) => toText(CATALOG.find((entry) => entry.id === id)!.build()) === text);
+}
+
+/** Downloads torchvision's ImageNet weights (once) and attaches them to a slot. */
+export async function loadRealVision(slot: 0 | 1, model: Model, catalogId: string, onProgress: (loaded: number, total: number) => void) {
+  const lab = await import("tessera-lab");
+  const vision = await lab.loadVisionWeights(catalogId, onProgress);
+  const input = vision.graph.inputs[0].id;
+  const prepared: PreparedModel = {
+    ok: true,
+    task: { kind: "image-classification", label: "ImageNet classification with torchvision's trained weights", accuracyLabel: "top-1 accuracy", source: lab.VISION_WEIGHTS.find((item) => item.catalogId === catalogId)!.url, classes: 1000, tokenLevel: false, key: `imagenet-${catalogId}` },
+    model: vision.model,
+    description: `torchvision's ${model.name} with its published ImageNet weights, full size, reading 224×224 pictures.`,
+    params: vision.graph.paramCount,
+    originalParams: vision.graph.paramCount,
+    roles: { [input]: "image" },
+  };
+  useTrained.getState().keep(slot, { source: model, graph: vision.graph, prepared, kind: "pretrained", normalize: lab.IMAGENET_NORMALIZE, labels: vision.labels });
 }

@@ -23,7 +23,8 @@ type Lab = typeof import("tessera-lab");
 const SLOT_COLOURS = ["#5fb4ff", "#f0569f"];
 const DEFAULT_TEXT = "To be, or not to be, that is the question:";
 const DEFAULT_SYMBOLS = "3a7f019c42e8";
-const PAD = 168;
+// The pad's own resolution: enough for the 224×224 ImageNet models.
+const PAD = 224;
 
 // -- Shared input --------------------------------------------------------------------
 
@@ -65,7 +66,7 @@ function readPad(pad: HTMLCanvasElement, h: number, w: number, channels: number)
 }
 
 /** Ids and labels for every input of a prepared model, from the shared input. */
-export function makeFeeds(lab: Lab, prepared: PreparedModel, graph: GraphModel, inputs: Inputs, tokenizer?: Gpt2Tokenizer) {
+export function makeFeeds(lab: Lab, prepared: PreparedModel, graph: GraphModel, inputs: Inputs, tokenizer?: Gpt2Tokenizer, normalize?: { mean: number[]; std: number[] }) {
   const { task } = prepared;
   const feeds: Record<string, PlainFeed> = {};
   const labels: Record<string, string[]> = {};
@@ -74,7 +75,11 @@ export function makeFeeds(lab: Lab, prepared: PreparedModel, graph: GraphModel, 
     const shape = graph.inputShapes[id];
     if (role === "image") {
       const [c, h, w] = shape;
-      if (inputs.pad) feeds[id] = { data: readPad(inputs.pad, h, w, c), shape: [h, w, c] };
+      if (inputs.pad) {
+        const data = readPad(inputs.pad, h, w, c);
+        if (normalize) for (let i = 0; i < data.length; i++) data[i] = (data[i] - normalize.mean[i % c]) / normalize.std[i % c];
+        feeds[id] = { data, shape: [h, w, c] };
+      }
       continue;
     }
     const length = shape[0];
@@ -125,6 +130,8 @@ export interface Prepared {
   prepared: PreparedModel;
   weights: "random" | "trained" | "pretrained";
   tokenizer?: Gpt2Tokenizer;
+  normalize?: { mean: number[]; std: number[] };
+  labels?: string[];
 }
 
 export function usePreparedModel(slot: SlotIndex, model: Model | undefined) {
@@ -157,7 +164,7 @@ export function usePreparedModel(slot: SlotIndex, model: Model | undefined) {
     };
   }, [model, trained]);
 
-  const fromTraining = useMemo(() => (trained ? { value: { graph: trained.graph, prepared: trained.prepared, weights: trained.kind, tokenizer: trained.tokenizer } as Prepared, error: null } : null), [trained]);
+  const fromTraining = useMemo(() => (trained ? { value: { graph: trained.graph, prepared: trained.prepared, weights: trained.kind, tokenizer: trained.tokenizer, normalize: trained.normalize, labels: trained.labels } as Prepared, error: null } : null), [trained]);
   if (fromTraining) return fromTraining;
   return state.model === model ? state : { value: null, error: null };
 }
@@ -173,6 +180,8 @@ interface Layer extends TracedLayer {
   block?: string;
   /** Kept for activations, so their effect shows as a before and after. */
   before?: Float32Array;
+  /** Pixels to show for a normalised input. */
+  picture?: Float32Array;
 }
 
 interface Trace {
@@ -210,8 +219,8 @@ function fitLabels(labels: string[] | undefined, length: number) {
 }
 
 export function runTrace(lab: Lab, value: Prepared, inputs: Inputs): Trace | null {
-  const { graph, prepared, tokenizer } = value;
-  const { feeds, labels, used } = makeFeeds(lab, prepared, graph, inputs, tokenizer);
+  const { graph, prepared, tokenizer, normalize } = value;
+  const { feeds, labels, used } = makeFeeds(lab, prepared, graph, inputs, tokenizer, normalize);
   if (Object.keys(feeds).length < graph.inputs.length) return null;
   const started = performance.now();
   const traced = lab.traceArrays(graph, feeds);
@@ -247,7 +256,12 @@ export function runTrace(lab: Lab, value: Prepared, inputs: Inputs): Trace | nul
     if (OPS[node.op]?.category === "activation" && previous && node.inputs[0] === previous.nodeId) layer.before = previous.data;
     return layer;
   });
-  const classes = prepared.task.kind === "image-classification" ? lab.DATASETS[prepared.task.imageDataset ?? "mnist"].classes : prepared.task.kind === "sequence-classification" ? Array.from({ length: prepared.task.classes }, (_, i) => `most ${lab.SYMBOLS[i]}`) : undefined;
+  // The input picture as pixels, before any normalisation, for showing.
+  const input = layers.find((layer) => layer.node.op === "input" && layer.shape.length === 3);
+  if (input && normalize && inputs.pad) input.picture = readPad(inputs.pad, input.shape[0], input.shape[1], input.shape[2]);
+  const { task } = prepared;
+  const classes =
+    value.labels ?? (task.kind === "image-classification" ? lab.DATASETS[task.imageDataset ?? "mnist"].classes : task.kind === "sequence-classification" ? Array.from({ length: task.classes }, (_, i) => `most ${lab.SYMBOLS[i]}`) : undefined);
   return { layers, ms, used, task: prepared.task, classes, decode: tokenizer ? (id: number) => showToken(tokenizer.decode([id])) : undefined };
 }
 
@@ -348,7 +362,7 @@ function Maps({ layer, image }: { layer: Layer; image: boolean }) {
   const [h, w, c] = layer.shape;
   const data = layer.data;
   if (image) {
-    return <Picture data={data} h={h} w={w} c={c} />;
+    return <Picture data={layer.picture ?? data} h={h} w={w} c={c} />;
   }
   const show = Math.min(c, 24);
   return (
@@ -593,8 +607,23 @@ function Ranked({ items, mono }: { items: { label: string; p: number }[]; mono?:
 
 const QUIET = new Set(["dropout", "flatten", "relu", "relu6", "gelu", "silu", "sigmoid", "tanh", "hardswish", "take_first", "mean_pool", "gap"]);
 
+/** True once the element has come near the screen, so long traces only draw what is looked at. */
+function useSeen<T extends Element>() {
+  const ref = useRef<T>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || seen) return;
+    const observer = new IntersectionObserver((entries) => entries.some((entry) => entry.isIntersecting) && setSeen(true), { rootMargin: "800px 0px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [seen]);
+  return [ref, seen] as const;
+}
+
 function LayerCard({ layer, index, trace, last, state, onFocus }: { layer: Layer; index: number; trace: Trace; last: boolean; state: "past" | "now" | "later"; onFocus: () => void }) {
   const [open, setOpen] = useState(!QUIET.has(layer.node.op));
+  const [ref, seen] = useSeen<HTMLElement>();
   const words = useMemo(() => explain(layer.node, layer.inputShapes, layer.outputShape), [layer.node, layer.inputShapes, layer.outputShape]);
   const numbers = useMemo(() => stats(layer.data), [layer.data]);
   const category = OPS[layer.node.op]?.category ?? "reshape";
@@ -611,6 +640,7 @@ function LayerCard({ layer, index, trace, last, state, onFocus }: { layer: Layer
   };
   return (
     <article
+      ref={ref}
       data-step={index}
       onClick={onFocus}
       className={cn(
@@ -640,8 +670,8 @@ function LayerCard({ layer, index, trace, last, state, onFocus }: { layer: Layer
               </div>
             )}
             <p className="mt-2 text-[12.5px] leading-relaxed">{words.words}</p>
-            <div className="mt-3">{visual()}</div>
-            {!isInput && !last && (
+            <div className="mt-3">{seen ? visual() : <div className="h-24 rounded-md bg-surface-2" />}</div>
+            {seen && !isInput && !last && (
               <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-3">
                 <Histogram data={layer.data} before={layer.before} />
                 <dl className="grid grid-cols-2 gap-x-2 font-mono text-[10.5px] text-muted">
