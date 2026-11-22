@@ -3,18 +3,20 @@
 import { Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { OPS, type Model, type Node, type Shape } from "tessera-engine";
-import type { GraphModel, PlainFeed, PreparedModel, TaskSpec, TracedLayer } from "tessera-lab";
+import type { Gpt2Tokenizer, GraphModel, PlainFeed, PreparedModel, TaskSpec, TracedLayer } from "tessera-lab";
 import { CATEGORY_COLOURS } from "@/lib/display";
 import { explain } from "@/lib/equations";
 import { useLab, type SlotIndex } from "@/lib/store";
 import { trainedFor, useTrained } from "@/lib/trained";
 import { cn } from "@/lib/utils";
 import Tex from "./tex";
+import { RealWeightsButton, WeightsBadge } from "./weights";
 
 // Follow one input through every layer: what each layer computes (its
 // equation, with this model's real sizes), and the actual numbers it produced.
 // Runs the small version of the model the Train tab trains, with trained
-// weights once it has been trained there and fresh random ones before.
+// weights once it has been trained there and fresh random ones before; GPT-2
+// can run full size with OpenAI's published weights.
 
 type Lab = typeof import("tessera-lab");
 
@@ -25,7 +27,7 @@ const PAD = 168;
 
 // -- Shared input --------------------------------------------------------------------
 
-interface Inputs {
+export interface Inputs {
   text: string;
   symbols: string;
   /** The drawing pad; read at whatever size each model wants. */
@@ -63,7 +65,7 @@ function readPad(pad: HTMLCanvasElement, h: number, w: number, channels: number)
 }
 
 /** Ids and labels for every input of a prepared model, from the shared input. */
-function makeFeeds(lab: Lab, prepared: PreparedModel, graph: GraphModel, inputs: Inputs) {
+export function makeFeeds(lab: Lab, prepared: PreparedModel, graph: GraphModel, inputs: Inputs, tokenizer?: Gpt2Tokenizer) {
   const { task } = prepared;
   const feeds: Record<string, PlainFeed> = {};
   const labels: Record<string, string[]> = {};
@@ -81,7 +83,14 @@ function makeFeeds(lab: Lab, prepared: PreparedModel, graph: GraphModel, inputs:
       feeds[id] = { data: ids, shape: [length] };
       continue;
     }
-    if (task.kind === "language-modelling" || task.kind === "masked-tokens") {
+    if (tokenizer) {
+      // A real model's own tokens; the rest is filled with end-of-text, which a causal model never looks back at.
+      const tokens = tokenizer.encode(inputs.text).slice(-length);
+      used = Math.max(1, tokens.length);
+      ids.fill(50256);
+      tokens.forEach((t, i) => (ids[i] = t));
+      labels[id] = Array.from(ids, (t, i) => (i < tokens.length ? showToken(tokenizer.decode([t])) : "·"));
+    } else if (task.kind === "language-modelling" || task.kind === "masked-tokens") {
       const text = inputs.text.slice(0, length);
       used = Math.max(1, text.length);
       const encoded = lab.encodeChars(text.padEnd(length, " "));
@@ -106,15 +115,19 @@ function makeFeeds(lab: Lab, prepared: PreparedModel, graph: GraphModel, inputs:
   return { feeds, labels, used };
 }
 
+/** A token as text, with its leading space and line breaks made visible. */
+export const showToken = (text: string) => text.replace(/ /g, "␣").replace(/\n/g, "↵");
+
 // -- Running a model -----------------------------------------------------------------
 
-interface Prepared {
+export interface Prepared {
   graph: GraphModel;
   prepared: PreparedModel;
-  trained: boolean;
+  weights: "random" | "trained" | "pretrained";
+  tokenizer?: Gpt2Tokenizer;
 }
 
-function usePreparedModel(slot: SlotIndex, model: Model | undefined) {
+export function usePreparedModel(slot: SlotIndex, model: Model | undefined) {
   const trainedSlots = useTrained((state) => state.slots);
   const trained = trainedFor(slot, model, trainedSlots);
   const [state, setState] = useState<{ value: Prepared | null; error: string | null; model?: Model }>({ value: null, error: null });
@@ -133,7 +146,7 @@ function usePreparedModel(slot: SlotIndex, model: Model | undefined) {
       }
       try {
         graph = lab.buildGraph(prepared.model, { seed: 0 });
-        setState({ value: { graph, prepared, trained: false }, error: null, model });
+        setState({ value: { graph, prepared, weights: "random" }, error: null, model });
       } catch (caught) {
         setState({ value: null, error: caught instanceof Error ? caught.message : String(caught), model });
       }
@@ -144,7 +157,7 @@ function usePreparedModel(slot: SlotIndex, model: Model | undefined) {
     };
   }, [model, trained]);
 
-  const fromTraining = useMemo(() => (trained ? { value: { graph: trained.graph, prepared: trained.prepared, trained: true }, error: null } : null), [trained]);
+  const fromTraining = useMemo(() => (trained ? { value: { graph: trained.graph, prepared: trained.prepared, weights: trained.kind, tokenizer: trained.tokenizer } as Prepared, error: null } : null), [trained]);
   if (fromTraining) return fromTraining;
   return state.model === model ? state : { value: null, error: null };
 }
@@ -168,6 +181,8 @@ interface Trace {
   used: number;
   task: TaskSpec;
   classes?: string[];
+  /** Text for an output id, for real tokenizers. */
+  decode?: (id: number) => string;
 }
 
 /** Which input nodes each node depends on, so a sequence's rows get the right token labels. */
@@ -194,9 +209,9 @@ function fitLabels(labels: string[] | undefined, length: number) {
   return Array.from({ length }, (_, i) => String(i));
 }
 
-function runTrace(lab: Lab, value: Prepared, inputs: Inputs): Trace | null {
-  const { graph, prepared } = value;
-  const { feeds, labels, used } = makeFeeds(lab, prepared, graph, inputs);
+export function runTrace(lab: Lab, value: Prepared, inputs: Inputs): Trace | null {
+  const { graph, prepared, tokenizer } = value;
+  const { feeds, labels, used } = makeFeeds(lab, prepared, graph, inputs, tokenizer);
   if (Object.keys(feeds).length < graph.inputs.length) return null;
   const started = performance.now();
   const traced = lab.traceArrays(graph, feeds);
@@ -233,7 +248,7 @@ function runTrace(lab: Lab, value: Prepared, inputs: Inputs): Trace | null {
     return layer;
   });
   const classes = prepared.task.kind === "image-classification" ? lab.DATASETS[prepared.task.imageDataset ?? "mnist"].classes : prepared.task.kind === "sequence-classification" ? Array.from({ length: prepared.task.classes }, (_, i) => `most ${lab.SYMBOLS[i]}`) : undefined;
-  return { layers, ms, used, task: prepared.task, classes };
+  return { layers, ms, used, task: prepared.task, classes, decode: tokenizer ? (id: number) => showToken(tokenizer.decode([id])) : undefined };
 }
 
 // -- Pictures of numbers -------------------------------------------------------------
@@ -516,7 +531,7 @@ function Sequence({ layer, used }: { layer: Layer; used: number }) {
   );
 }
 
-function Output({ layer, trace }: { layer: Layer; trace: Trace }) {
+export function Output({ layer, trace }: { layer: Layer; trace: Trace }) {
   const { task } = trace;
   const data = layer.data;
   if (layer.shape.length === 1 && trace.classes) {
@@ -528,6 +543,7 @@ function Output({ layer, trace }: { layer: Layer; trace: Trace }) {
   const [s, v] = layer.shape;
   const row = (r: number) => softmax(data.subarray(r * v, (r + 1) * v));
   const decode = (i: number) => {
+    if (trace.decode) return trace.decode(i);
     if (task.kind === "seq2seq") return i === 0 ? "▸" : "0123456789abcdef"[i - 1] ?? "?";
     if (task.kind === "language-modelling" || task.kind === "masked-tokens") return i === 0 ? "↵" : i >= 1 && i <= 95 ? (i === 1 ? "␣" : String.fromCharCode(i + 31)) : "?";
     return String(i);
@@ -691,9 +707,10 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
         </span>
         <span className="text-[13px] font-medium">{data.model.name}</span>
         {value && (
-          <span className={cn("rounded-full px-2 py-0.5 text-[11px]", value.trained ? "bg-added/15 text-added" : "bg-warn/15 text-warn")}>
-            {value.trained ? "trained weights" : "random weights, train it to see real patterns"}
-          </span>
+          <>
+            <WeightsBadge weights={value.weights} />
+            <RealWeightsButton slot={slot} model={data.model} weights={value.weights} />
+          </>
         )}
         {trace.value && <span className="ml-auto font-mono text-[11px] text-muted">{layers.length} steps · {trace.value.ms.toFixed(0)} ms</span>}
         {value && <p className="w-full text-[11.5px] text-muted">{value.prepared.description}</p>}
@@ -748,7 +765,7 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
 
 // -- Input pads ----------------------------------------------------------------------
 
-function DrawPad({ onChange, setPad }: { onChange: () => void; setPad: (canvas: HTMLCanvasElement) => void }) {
+export function DrawPad({ onChange, setPad }: { onChange: () => void; setPad: (canvas: HTMLCanvasElement) => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const drawing = useRef<{ x: number; y: number } | null>(null);
   const last = useRef(0);

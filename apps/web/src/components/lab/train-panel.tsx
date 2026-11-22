@@ -101,7 +101,7 @@ export default function TrainPanel() {
           ...(dataset ? { prepare: { imageDataset: dataset } } : {}),
           // The first seed's weights stay alive for the trace view; the rest are freed.
           keepTrained: ({ modelIndex, run, graph, prepared }) => {
-            if (run === 0) useTrained.getState().keep(slotOf[modelIndex], { source: models[modelIndex], graph, prepared });
+            if (run === 0) useTrained.getState().keep(slotOf[modelIndex], { source: models[modelIndex], graph, prepared, kind: "trained" });
             else graph.dispose();
           },
         },
