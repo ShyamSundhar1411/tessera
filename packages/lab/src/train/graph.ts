@@ -50,8 +50,35 @@ export interface GraphModel {
   paramCount: number;
   /** Runs the graph. Call inside tf.tidy (or a gradient function); the result is the last node's output. */
   apply(feeds: Record<string, tf.Tensor>, options: ApplyOptions): tf.Tensor;
+  /**
+   * Runs the graph in evaluation mode and keeps what every layer produced, for
+   * explaining a forward pass: each step's output, and for attention layers
+   * the attention weights [batch, heads, query, key]. The caller disposes the
+   * tensors (disposeTrace).
+   */
+  trace(feeds: Record<string, tf.Tensor>): TraceStep[];
   dispose(): void;
 }
+
+export interface TraceStep {
+  /** The unrolled copy, such as "attention_r3" for the fourth copy of a repeated block. */
+  key: string;
+  nodeId: string;
+  /** Which copy of a repeated block this is (0 when not repeated). */
+  copy: number;
+  value: tf.Tensor;
+  attention?: tf.Tensor;
+}
+
+export function disposeTrace(steps: TraceStep[]): void {
+  for (const step of steps) {
+    step.value.dispose();
+    step.attention?.dispose();
+  }
+}
+
+/** Set while tracing, so attention can hand back its weights without changing every signature. */
+let attentionSink: tf.Tensor[] | null = null;
 
 interface Step {
   /** Unique per unrolled copy: node id plus a copy suffix such as "_r0". */
@@ -340,6 +367,28 @@ export function buildGraph(model: Model, options: GraphOptions = {}): GraphModel
     return output!;
   };
 
+  const trace = (feeds: Record<string, tf.Tensor>): TraceStep[] => {
+    const values = new Map<string, tf.Tensor>();
+    const out: TraceStep[] = [];
+    for (const step of steps) {
+      const xs = step.inputs.map((key) => values.get(key)!);
+      const kept = tf.tidy(() => {
+        attentionSink = [];
+        try {
+          const value = forward(step, xs, params.get(step.key)!, feeds, { training: false });
+          const attention = attentionSink[0];
+          return attention ? [value, attention] : [value];
+        } finally {
+          attentionSink = null;
+        }
+      });
+      values.set(step.key, kept[0]);
+      const copy = Number(/_r(\d+)/.exec(step.suffix)?.[1] ?? 0);
+      out.push({ key: step.key, nodeId: step.node.id, copy, value: kept[0], attention: kept[1] });
+    }
+    return out;
+  };
+
   const forward = (step: Step, xs: tf.Tensor[], p: Params, feeds: Record<string, tf.Tensor>, run: ApplyOptions): tf.Tensor => {
     const { node } = step;
     const a = node.args;
@@ -541,6 +590,7 @@ export function buildGraph(model: Model, options: GraphOptions = {}): GraphModel
     nodeOfVariable,
     paramCount,
     apply,
+    trace,
     dispose() {
       for (const p of params.values()) for (const v of [...Object.values(p.w), ...Object.values(p.state)]) v.dispose();
     },
@@ -645,7 +695,9 @@ function attentionMask(seq: number, causal: boolean, window: number): tf.Tensor2
 function attend(q: tf.Tensor, k: tf.Tensor, v: tf.Tensor, scale: number, mask: tf.Tensor | null): tf.Tensor {
   let scores = tf.mul(tf.matMul(q as tf.Tensor4D, k as tf.Tensor4D, false, true), scale);
   if (mask) scores = tf.add(scores, mask);
-  return tf.matMul(tf.softmax(scores, -1) as tf.Tensor4D, v as tf.Tensor4D);
+  const weights = tf.softmax(scores, -1);
+  if (attentionSink) attentionSink.push(weights);
+  return tf.matMul(weights as tf.Tensor4D, v as tf.Tensor4D);
 }
 
 type Weights = Record<string, tf.Variable>;

@@ -29,6 +29,12 @@ export interface AnyTrainOptions extends TrainOptions {
   dataSeed?: number;
   /** Clip the global gradient norm to this (default 1; 0 turns it off). Keeps post-norm transformers steady. */
   clipNorm?: number;
+  /**
+   * Receives each trained model when its run ends, so the page can explain
+   * what it learned. The receiver owns the graph and must dispose it; without
+   * this option graphs are disposed.
+   */
+  keepTrained?: (trained: { modelIndex: number; run: number; seed: number; graph: GraphModel; prepared: PreparedModel }) => void;
 }
 
 export interface AnyTrainEvent extends TrainEvent {
@@ -196,7 +202,8 @@ async function trainRun(
     return result(false);
   } finally {
     optimizer.dispose();
-    graph.dispose();
+    if (options.keepTrained) options.keepTrained({ modelIndex, run, seed, graph, prepared });
+    else graph.dispose();
   }
 }
 

@@ -33,7 +33,7 @@ export {
   type RunSummary,
   type MetricComparison,
 } from "./train/metrics";
-export { buildGraph, GraphError, type GraphModel, type GraphOptions, type ApplyOptions } from "./train/graph";
+export { buildGraph, GraphError, disposeTrace, type GraphModel, type GraphOptions, type ApplyOptions, type TraceStep } from "./train/graph";
 export {
   prepareForTraining,
   planTraining,

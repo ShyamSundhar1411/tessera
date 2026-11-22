@@ -49,6 +49,8 @@ describe("graph executor matches the engine's parameter counts", () => {
   test("every model prepared for training", () => {
     for (const entry of CATALOG) {
       const prepared = prepareForTraining(entry.build());
+      // U-Net labels every pixel; there is no segmentation task yet, so it is refused with a reason.
+      if (!prepared.ok && entry.id === "unet") continue;
       if (!prepared.ok) throw new Error(`${entry.id}: ${prepared.reason}`);
       // Skip building the big CNNs here; their counts are checked above and in toTf's tests.
       if (prepared.params > 3e6) continue;
@@ -200,6 +202,29 @@ describe("initialisation", () => {
     expect(Array.from(queries[0].dataSync().slice(0, 4))).not.toEqual(Array.from(queries[1].dataSync().slice(0, 4)));
     // ...and all copies report gradient norms against the one engine node.
     expect(new Set(queries.map((v) => graph.nodeOfVariable.get(v.name))).size).toBe(1);
+    graph.dispose();
+  });
+});
+
+import { describe as describeTrace, expect as expectTrace, test as testTrace } from "bun:test";
+import { catalogModel as catalogTrace, shrinkLanguageModel as shrinkTrace } from "tessera-engine";
+import { buildGraph as buildTrace, disposeTrace } from "./graph";
+import * as tfTrace from "@tensorflow/tfjs";
+
+describeTrace("trace", () => {
+  testTrace("keeps every step's output and the attention weights", () => {
+    const model = shrinkTrace(catalogTrace("gpt2")!, { dim: 32, layers: 2, heads: 2, vocab: 20, seqLen: 8 });
+    const graph = buildTrace(model, { seed: 1 });
+    const input = graph.inputs[0].id;
+    const steps = graph.trace({ [input]: tfTrace.tensor2d([[1, 2, 3, 4, 5, 6, 7, 8]], [1, 8], "int32") });
+    const attention = steps.filter((step) => step.attention);
+    expectTrace(attention.length).toBe(2);
+    expectTrace(attention[0].attention!.shape).toEqual([1, 2, 8, 8]);
+    // Causal: the first query attends only to itself.
+    const first = attention[0].attention!.arraySync() as number[][][][];
+    expectTrace(first[0][0][0][0]).toBeCloseTo(1, 5);
+    expectTrace(steps[steps.length - 1].value.shape).toEqual([1, 8, 20]);
+    disposeTrace(steps);
     graph.dispose();
   });
 });

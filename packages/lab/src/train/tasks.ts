@@ -316,9 +316,12 @@ function shrink(model: Model, options: PrepareOptions, vocab: number | undefined
 /** Points the model's final linear layer (before a closing softmax, if any) at the task's classes. */
 function setLastLinear(model: Model, classes: number, changes?: string[]): Model {
   const nodes = model.nodes.map((node) => ({ ...node, args: { ...node.args } }));
+  // Walk back past layers that keep the class count (softmax, pooling, flatten,
+  // activations) to the layer that produces it: a linear, or a 1×1 conv as in SqueezeNet.
+  const passes = new Set(["softmax", "flatten", "gap", "relu", "relu6", "gelu", "silu", "sigmoid", "tanh", "hardswish", "dropout", "identity"]);
   let i = nodes.length - 1;
-  if (nodes[i].op === "softmax") i--;
-  if (nodes[i]?.op === "linear" && Number(nodes[i].args.out) !== classes) {
+  while (i > 0 && passes.has(nodes[i].op)) i--;
+  if ((nodes[i]?.op === "linear" || nodes[i]?.op === "conv2d") && Number(nodes[i].args.out) !== classes) {
     nodes[i].args.out = classes;
     changes?.push(`last layer set to ${classes} classes`);
   }
