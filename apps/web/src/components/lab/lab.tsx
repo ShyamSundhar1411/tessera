@@ -12,6 +12,7 @@ import CodePanel from "./code-panel";
 import ComparePanel from "./compare-panel";
 import Graph2D from "./graph-2d";
 import Inspector from "./inspector";
+import MathsPanel from "./maths-panel";
 import Palette from "./palette";
 import RunPanel from "./run-panel";
 import SourceDialog from "./source-dialog";
@@ -32,6 +33,7 @@ const VIEWS = [
 const PANELS: { id: PanelName; label: string }[] = [
   { id: "inspect", label: "Inspect" },
   { id: "compare", label: "Compare" },
+  { id: "maths", label: "Maths" },
   { id: "text", label: "Text" },
   { id: "code", label: "Export" },
   { id: "train", label: "Train" },
@@ -176,6 +178,7 @@ export default function Lab() {
           <div className="scroll-quiet min-h-0 flex-1 overflow-y-auto">
             {panel === "inspect" && <Inspector />}
             {panel === "compare" && <ComparePanel />}
+            {panel === "maths" && <MathsPanel />}
             {panel === "text" && <TextPanel />}
             {panel === "code" && <CodePanel />}
             {panel === "train" && <TrainPanel />}

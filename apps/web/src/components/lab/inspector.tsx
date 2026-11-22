@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, Trash } from "lucide-react";
-import { formatCount, OPS, type ArgValue } from "tessera-engine";
+import { CATALOG, formatCount, OPS, type ArgValue } from "tessera-engine";
 import { formatShape } from "@/lib/display";
 import { removeNode, setRepeat, updateNode } from "@/lib/edit";
 import { useLab } from "@/lib/store";
@@ -48,6 +48,22 @@ export default function Inspector() {
         <p className="font-medium text-ink">Nothing selected</p>
         <p className="mt-1">Click a layer or block to see its shapes, parameters and compute, and to change its settings.</p>
         {data === null && <p className="mt-3">Turn on <span className="text-ink">Edit</span> to drag in new layers and rewire connections.</p>}
+        {slots.map((slot, index) => {
+          const paper = slot && CATALOG.find((entry) => entry.name === slot.origin)?.paper;
+          if (!paper) return null;
+          return (
+            <div key={index} className="mt-4 rounded-xl border border-line p-3">
+              <p className="text-[11px] tracking-wide uppercase">{index ? "B" : "A"} comes from</p>
+              <a href={paper.url} target="_blank" rel="noreferrer" className="mt-1 block font-medium text-ink hover:underline">
+                {paper.title}
+              </a>
+              <p className="text-[11.5px]">
+                {paper.authors}, {paper.year}
+              </p>
+              <p className="mt-2 text-ink">{paper.idea}</p>
+            </div>
+          );
+        })}
       </div>
     );
 

@@ -1,7 +1,5 @@
 "use client";
 
-import "katex/dist/katex.min.css";
-import katex from "katex";
 import { Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { OPS, type Model, type Node, type Shape } from "tessera-engine";
@@ -11,6 +9,7 @@ import { explain } from "@/lib/equations";
 import { useLab, type SlotIndex } from "@/lib/store";
 import { trainedFor, useTrained } from "@/lib/trained";
 import { cn } from "@/lib/utils";
+import Tex from "./tex";
 
 // Follow one input through every layer: what each layer computes (its
 // equation, with this model's real sizes), and the actual numbers it produced.
@@ -461,13 +460,6 @@ function topK(probs: number[], k: number) {
     .map((p, i) => ({ p, i }))
     .sort((a, b) => b.p - a.p)
     .slice(0, k);
-}
-
-// -- Equations -----------------------------------------------------------------------
-
-function Tex({ tex, display }: { tex: string; display?: boolean }) {
-  const html = useMemo(() => katex.renderToString(tex, { throwOnError: false, displayMode: display, strict: false }), [tex, display]);
-  return <span className={cn(display && "block overflow-x-auto scroll-quiet py-1")} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // -- What each layer shows -----------------------------------------------------------

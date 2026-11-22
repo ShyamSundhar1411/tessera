@@ -1,14 +1,15 @@
 "use client";
 
-import { FileUp, Search, X } from "lucide-react";
+import { ExternalLink, FileUp, Search, X } from "lucide-react";
 import { useState } from "react";
-import { CATALOG, fetchConfig, fromHuggingFace, fromOnnx, parseText, type Model } from "tessera-engine";
+import { CATALOG, PAPER_TIMELINE, fetchConfig, fromHuggingFace, fromOnnx, parseText, type Model } from "tessera-engine";
 import { useLab, type SlotIndex } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-type Tab = "catalog" | "huggingface" | "config" | "onnx" | "blank";
+type Tab = "catalog" | "papers" | "huggingface" | "config" | "onnx" | "blank";
 const TABS: { id: Tab; label: string }[] = [
   { id: "catalog", label: "Catalog" },
+  { id: "papers", label: "Papers" },
   { id: "huggingface", label: "Hugging Face" },
   { id: "config", label: "Paste config.json" },
   { id: "onnx", label: "ONNX file" },
@@ -99,6 +100,36 @@ export default function SourceDialog({ slot, onClose }: { slot: SlotIndex; onClo
                 </ul>
               </section>
             ))}
+
+          {tab === "papers" && (
+            <ol className="relative ml-2 border-l border-line">
+              {PAPER_TIMELINE.map((entry, index) => {
+                const paper = entry.paper!;
+                const newYear = index === 0 || PAPER_TIMELINE[index - 1].paper!.year !== paper.year;
+                return (
+                  <li key={entry.id} className="relative pb-4 pl-5 last:pb-0">
+                    <span className={cn("absolute top-1.5 -left-[5px] size-2.5 rounded-full border-2 border-surface", newYear ? "bg-accent" : "bg-muted")} />
+                    {newYear && <p className="mb-1 font-mono text-[12px] font-semibold text-accent">{paper.year}</p>}
+                    <div className="rounded-xl border border-line p-3">
+                      <div className="flex items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          <a href={paper.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[13.5px] font-medium hover:underline">
+                            {paper.title}
+                            <ExternalLink className="size-3 flex-none text-muted" />
+                          </a>
+                          <p className="mt-0.5 text-[11.5px] text-muted">{paper.authors}</p>
+                        </div>
+                        <button type="button" onClick={() => finish(entry.build(), entry.name)} className="flex-none rounded-lg border border-line px-2.5 py-1 text-[12px] hover:border-muted">
+                          Load {entry.name}
+                        </button>
+                      </div>
+                      <p className="mt-2 text-[12.5px] leading-snug">{paper.idea}</p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
 
           {tab === "huggingface" && (
             <div className="space-y-3">

@@ -10,7 +10,7 @@ import { topoSort } from "./edit";
 
 export type SlotIndex = 0 | 1;
 export type View = "2d" | "3d" | "trace";
-export type PanelName = "inspect" | "compare" | "text" | "code" | "train" | "run";
+export type PanelName = "inspect" | "compare" | "maths" | "text" | "code" | "train" | "run";
 
 export interface Slot {
   model: Model;
