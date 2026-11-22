@@ -2,7 +2,8 @@ import { ArrowRight, Code2, Dumbbell, GraduationCap, Microscope, Network, Play, 
 import Link from "next/link";
 import { analyze, CATALOG, formatBytes, formatCount, OPS, PAPER_TIMELINE, type Model } from "tessera-engine";
 import { Mark } from "@/components/brand/mark";
-import HeroScene from "@/components/landing/hero-scene";
+import Showcase from "@/components/landing/showcase";
+import { shotUrl } from "@/lib/shots";
 import Reveal from "@/components/landing/reveal";
 import { OpGlyph } from "@/components/lab/op-glyph";
 import Tex from "@/components/lab/tex";
@@ -25,12 +26,12 @@ function equationOf(model: Model, op: string) {
 }
 
 const MODES = [
-  { icon: Network, title: "Architecture", body: "Every layer drawn as what it does, in 2D, and the tensors themselves in 3D. Open blocks, drag a layer onto another to add a skip, edit the text form." },
-  { icon: Route, title: "Trace", body: "Type a sentence or draw a digit and follow it through every layer: the equation with this model's sizes, a plain explanation, and the real numbers." },
-  { icon: Sigma, title: "Maths", body: "From the wiring alone: how far gradients travel, how much of the image each output sees, where the compute goes, what longer context costs." },
-  { icon: Dumbbell, title: "Train", body: "A small version of each model learns a task picked from its wiring, on your GPU, over several seeds, so a difference can be told from luck." },
-  { icon: Play, title: "Run", body: "Real published weights where they exist: GPT-2 writes text token by token, ResNet names your photo. Or run the model you just trained." },
-  { icon: Code2, title: "Export", body: "PyTorch modules with exactly the same parameter count, and a Colab notebook that trains your version against the original on a free GPU." },
+  { shot: "architecture", icon: Network, title: "Architecture", body: "Every layer drawn as what it does, in 2D, and the tensors themselves in 3D. Open blocks, drag a layer onto another to add a skip, edit the text form." },
+  { shot: "trace", icon: Route, title: "Trace", body: "Type a sentence or draw a digit and follow it through every layer: the equation with this model's sizes, a plain explanation, and the real numbers." },
+  { shot: "maths", icon: Sigma, title: "Maths", body: "From the wiring alone: how far gradients travel, how much of the image each output sees, where the compute goes, what longer context costs." },
+  { shot: "train", icon: Dumbbell, title: "Train", body: "A small version of each model learns a task picked from its wiring, on your GPU, over several seeds, so a difference can be told from luck." },
+  { shot: "run", icon: Play, title: "Run", body: "Real published weights where they exist: GPT-2 writes text token by token, ResNet names your photo. Or run the model you just trained." },
+  { shot: "export", icon: Code2, title: "Export", body: "PyTorch modules with exactly the same parameter count, and a Colab notebook that trains your version against the original on a free GPU." },
 ];
 
 const AUDIENCES = [
@@ -122,10 +123,10 @@ export default function Home() {
       </header>
 
       {/* Hero */}
-      <section className="mx-auto grid max-w-6xl items-center gap-10 px-6 pt-12 pb-14 sm:pt-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,32rem)]">
+      <section className="mx-auto grid max-w-6xl items-center gap-10 px-6 pt-12 pb-14 sm:pt-16 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <div>
           <p className="rise text-[13px] font-medium text-accent">A lab for neural network architectures</p>
-          <h1 className="rise mt-3 max-w-3xl text-4xl text-balance sm:text-[3.6rem]" style={{ animationDelay: "80ms" }}>
+          <h1 className="rise mt-3 max-w-3xl text-4xl text-balance sm:text-[3.3rem]" style={{ animationDelay: "80ms" }}>
             See inside any neural network. <span className="text-brand">Then rewire it.</span>
           </h1>
           <p className="rise mt-6 max-w-2xl text-lg leading-relaxed text-muted" style={{ animationDelay: "160ms" }}>
@@ -144,8 +145,8 @@ export default function Home() {
             Free, in your browser, no account. Nothing you load leaves your machine.
           </p>
         </div>
-        <div className="rise" style={{ animationDelay: "200ms" }}>
-          <HeroScene />
+        <div className="rise min-w-0" style={{ animationDelay: "200ms" }}>
+          <Showcase />
         </div>
       </section>
 
@@ -299,13 +300,19 @@ export default function Home() {
       <section className="mx-auto mt-24 max-w-6xl px-6">
         {heading("The lab", "Six ways to look at one architecture")}
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {MODES.map(({ icon: Icon, title, body }, index) => (
-            <Reveal key={title} delay={(index % 3) * 90} className="rounded-2xl border border-line bg-surface p-5">
-              <span className="grid size-10 place-items-center rounded-xl bg-accent/15 text-accent">
-                <Icon className="size-5" />
-              </span>
-              <h3 className="mt-3 text-[16px]">{title}</h3>
-              <p className="mt-1.5 text-[14px] leading-relaxed text-muted">{body}</p>
+          {MODES.map(({ shot, icon: Icon, title, body }, index) => (
+            <Reveal key={title} delay={(index % 3) * 90} className="group overflow-hidden rounded-2xl border border-line bg-surface transition-colors hover:border-muted">
+              <div className="aspect-[16/10] overflow-hidden border-b border-line">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={shotUrl(shot)} alt={`The ${title} mode`} loading="lazy" className="size-full object-cover object-top transition-transform duration-700 group-hover:scale-[1.03]" />
+              </div>
+              <div className="p-5">
+                <h3 className="flex items-center gap-2 text-[16px]">
+                  <Icon className="size-4.5 text-accent" />
+                  {title}
+                </h3>
+                <p className="mt-1.5 text-[14px] leading-relaxed text-muted">{body}</p>
+              </div>
             </Reveal>
           ))}
         </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink, FileUp, Search, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CATALOG, PAPER_TIMELINE, fetchConfig, fromHuggingFace, fromOnnx, parseText, type Model } from "tessera-engine";
 import { useLab, type SlotIndex } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -67,18 +67,24 @@ export default function SourceDialog({ slot, onClose }: { slot: SlotIndex; onClo
   };
   const shelves = [...new Set(CATALOG.map((entry) => entry.shelf))];
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={`Load architecture ${slot ? "B" : "A"}`} className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <header className="flex items-center justify-between border-b border-line px-5 py-3">
+      <div role="dialog" aria-modal="true" aria-label={`Load architecture ${slot ? "B" : "A"}`} className="flex h-[min(86dvh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <header className="flex flex-none items-center justify-between border-b border-line px-5 py-3">
           <h2 className="text-[15px]">Load architecture {slot ? "B" : "A"}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="grid size-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-ink">
             <X className="size-4" />
           </button>
         </header>
-        <div className="flex gap-1 overflow-x-auto border-b border-line px-3 py-2">
+        <div className="scroll-quiet flex flex-none gap-1 overflow-x-auto border-b border-line px-3 py-2">
           {TABS.map((item) => (
-            <button key={item.id} type="button" onClick={() => setTab(item.id)} className={cn("rounded-md px-2.5 py-1 text-[13px] whitespace-nowrap text-muted hover:text-ink", tab === item.id && "bg-surface-3 text-ink")}>
+            <button key={item.id} type="button" onClick={() => setTab(item.id)} className={cn("flex-none rounded-md px-2.5 py-1 text-[13px] whitespace-nowrap text-muted hover:text-ink", tab === item.id && "bg-surface-3 text-ink")}>
               {item.label}
             </button>
           ))}
@@ -157,7 +163,7 @@ export default function SourceDialog({ slot, onClose }: { slot: SlotIndex; onClo
 
           {tab === "huggingface" && (
             <div className="space-y-3">
-              <p className="text-[13px] leading-relaxed text-muted">Any open model whose config.json describes a decoder: Llama, Mistral, Mixtral, Qwen, Phi, Gemma, DeepSeek, OLMo, GPT-2 and their many fine-tunes. Gated models (Llama, Gemma) need their config pasted instead.</p>
+              <p className="text-[13px] leading-relaxed text-muted">Any open model whose config.json describes a decoder (Llama, Mistral, Mixtral, Qwen, Phi, Gemma, DeepSeek, OLMo, GPT-2 and their many fine-tunes) or a BERT-style encoder (BERT, RoBERTa, DistilBERT, ELECTRA). Gated models (Llama, Gemma) need their config pasted instead.</p>
               <form
                 className="flex gap-2"
                 onSubmit={(event) => {

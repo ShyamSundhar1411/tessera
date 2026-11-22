@@ -343,7 +343,8 @@ function StageView({ stage, index, model, selected, onSelect, pass, value, focus
         </mesh>
       )}
       {focus && <ValuePanel layer={focus.layer} height={height + (attention ? 1 : 0)} label={focus.label} />}
-      <Billboard position={[0, height + (attention ? 1.4 : 0.45), 0]}>
+      {/* Neighbouring labels alternate heights so long names do not run into each other. */}
+      <Billboard position={[0, height + (attention ? 1.4 : 0.45) + (index % 2) * 0.55, 0]}>
         <Text fontSize={0.26} color="#eef0f5" anchorX="center" anchorY="bottom" outlineWidth={0.015} outlineColor="#0b0d12" maxWidth={4}>
           {title}
         </Text>

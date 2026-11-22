@@ -166,10 +166,22 @@ body {
   }
 }
 
+/* The bar under the showcase tab that is about to move on. */
+.demo-progress {
+  animation: demo-progress linear both;
+}
+
+@keyframes demo-progress {
+  from {
+    transform: scaleX(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .text-brand,
   .rise,
-  .marquee {
+  .marquee,
+  .demo-progress {
     animation: none;
   }
 
