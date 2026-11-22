@@ -2,11 +2,12 @@
 
 import { Box, Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { OPS, type Model, type Node, type Shape } from "tessera-engine";
 import type { Gpt2Tokenizer, GraphModel, PlainFeed, PreparedModel, TaskSpec, TracedLayer } from "tessera-lab";
 import { CATEGORY_COLOURS } from "@/lib/display";
 import { explain } from "@/lib/equations";
+import { insight, working } from "@/lib/trace-insight";
 import { useLab, type SlotIndex } from "@/lib/store";
 import { useTraceShared } from "@/lib/trace-shared";
 import { trainedFor, useTrained } from "@/lib/trained";
@@ -196,7 +197,26 @@ interface Trace {
   classes?: string[];
   /** Text for an output id, for real tokenizers. */
   decode?: (id: number) => string;
+  /** The graph that produced it, for reading weights and the logit lens against the same model. */
+  graph: GraphModel;
 }
+
+/** What the reader has picked in a column, shared by every card in it. */
+interface Interact {
+  /** The token every sequence card is about. */
+  token: number;
+  setToken(token: number): void;
+  /** One number whose working is shown. */
+  picked: { key: string; index: number } | null;
+  pick(key: string, index: number): void;
+  byKey: Map<string, Layer>;
+  weights(key: string): Record<string, { shape: number[]; data: Float32Array }>;
+  /** What the model would predict from each residual-stream layer, at the picked token. */
+  lens: Map<string, { id: number; p: number }[]>;
+  decode(id: number): string;
+}
+
+const InteractContext = createContext<Interact | null>(null);
 
 /** Which input nodes each node depends on, so a sequence's rows get the right token labels. */
 function sourcesOf(model: Model) {
@@ -266,7 +286,7 @@ export function runTrace(lab: Lab, value: Prepared, inputs: Inputs): Trace | nul
   const { task } = prepared;
   const classes =
     value.labels ?? (task.kind === "image-classification" ? lab.DATASETS[task.imageDataset ?? "mnist"].classes : task.kind === "sequence-classification" ? Array.from({ length: task.classes }, (_, i) => `most ${lab.SYMBOLS[i]}`) : undefined);
-  return { layers, ms, used, task: prepared.task, classes, decode: tokenizer ? (id: number) => showToken(tokenizer.decode([id])) : undefined };
+  return { layers, ms, used, task: prepared.task, classes, decode: tokenizer ? (id: number) => showToken(tokenizer.decode([id])) : undefined, graph };
 }
 
 // -- Pictures of numbers -------------------------------------------------------------
@@ -302,9 +322,15 @@ interface HeatmapProps {
   className?: string;
   /** Height per row in CSS pixels; the width always fills. */
   rowHeight?: number;
+  /** Clicking a cell picks it. */
+  onPick?: (r: number, c: number) => void;
+  /** A row to outline, such as the picked token. */
+  highlightRow?: number;
+  /** A cell to ring, such as the number whose working is open. */
+  pickedCell?: { r: number; c: number };
 }
 
-function Heatmap({ rows, cols, at, scale, sequential, rowLabels, colLabels, describe, className, rowHeight }: HeatmapProps) {
+function Heatmap({ rows, cols, at, scale, sequential, rowLabels, colLabels, describe, className, rowHeight, onPick, highlightRow, pickedCell }: HeatmapProps) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [hover, setHover] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
   useEffect(() => {
@@ -329,19 +355,36 @@ function Heatmap({ rows, cols, at, scale, sequential, rowLabels, colLabels, desc
         {rowLabels && (
           <div className="flex flex-none flex-col pr-1 font-mono text-[9px] leading-none text-muted" style={{ height: rowHeight ? rows * rowHeight : undefined }}>
             {rowLabels.map((label, i) => (
-              <span key={i} className={cn("flex flex-1 items-center justify-end", hover?.r === i && "text-ink")}>
+              <span key={i} className={cn("flex flex-1 items-center justify-end", (hover?.r === i || highlightRow === i) && "font-semibold text-ink")}>
                 {rows <= 48 ? label : ""}
               </span>
             ))}
           </div>
         )}
-        <canvas
-          ref={ref}
-          onPointerMove={onMove}
-          onPointerLeave={() => setHover(null)}
-          className="min-w-0 flex-1 rounded-sm bg-surface-3/40 [image-rendering:pixelated]"
-          style={{ height: rowHeight ? rows * rowHeight : undefined, aspectRatio: rowHeight ? undefined : `${cols} / ${rows}` }}
-        />
+        <div className="relative min-w-0 flex-1">
+          <canvas
+            ref={ref}
+            onPointerMove={onMove}
+            onPointerLeave={() => setHover(null)}
+            onClick={(event) => {
+              if (!onPick) return;
+              const box = event.currentTarget.getBoundingClientRect();
+              const c = Math.floor(((event.clientX - box.left) / box.width) * cols);
+              const r = Math.floor(((event.clientY - box.top) / box.height) * rows);
+              if (r < 0 || r >= rows || c < 0 || c >= cols) return;
+              event.stopPropagation();
+              onPick(r, c);
+            }}
+            className={cn("block w-full rounded-sm bg-surface-3/40 [image-rendering:pixelated]", onPick && "cursor-pointer")}
+            style={{ height: rowHeight ? rows * rowHeight : undefined, aspectRatio: rowHeight ? undefined : `${cols} / ${rows}` }}
+          />
+          {highlightRow !== undefined && highlightRow < rows && (
+            <div className="pointer-events-none absolute inset-x-0 rounded-sm ring-1 ring-ink/80" style={{ top: `${(highlightRow / rows) * 100}%`, height: `${100 / rows}%` }} />
+          )}
+          {pickedCell && pickedCell.r < rows && pickedCell.c < cols && (
+            <div className="pointer-events-none absolute rounded-[2px] ring-2 ring-[#f7b955]" style={{ top: `${(pickedCell.r / rows) * 100}%`, left: `${(pickedCell.c / cols) * 100}%`, height: `${100 / rows}%`, width: `${100 / cols}%`, minWidth: 4, minHeight: 4 }} />
+          )}
+        </div>
       </div>
       {colLabels && cols <= 48 && (
         <div className="flex font-mono text-[9px] leading-none text-muted" style={{ paddingLeft: rowLabels ? 14 : 0 }}>
@@ -361,23 +404,44 @@ function Heatmap({ rows, cols, at, scale, sequential, rowLabels, colLabels, desc
   );
 }
 
-/** Feature maps [H, W, C] as a grid of small pictures, one per channel. */
+/** Feature maps [H, W, C] as a grid of small pictures, one per channel, strongest first. Click a pixel to see how it was computed. */
 function Maps({ layer, image }: { layer: Layer; image: boolean }) {
+  const ctx = useContext(InteractContext);
   const [h, w, c] = layer.shape;
   const data = layer.data;
+  const order = useMemo(() => {
+    const strength = Array.from({ length: c }, (_, k) => {
+      let s = 0;
+      for (let p = 0; p < h * w; p++) s += Math.abs(data[p * c + k]);
+      return s;
+    });
+    return strength.map((_, k) => k).sort((a, b) => strength[b] - strength[a]);
+  }, [data, h, w, c]);
   if (image) {
     return <Picture data={layer.picture ?? data} h={h} w={w} c={c} />;
   }
   const show = Math.min(c, 24);
+  const picked = ctx?.picked?.key === layer.key ? ctx.picked.index : -1;
   return (
     <div>
       <div className="grid grid-cols-6 gap-1 sm:grid-cols-8">
-        {Array.from({ length: show }, (_, k) => (
-          <Heatmap key={k} rows={h} cols={w} at={(r, col) => data[(r * w + col) * c + k]} scale={absMax(data, k, data.length, c)} describe={(r, col, v) => `channel ${k + 1}, pixel (${r}, ${col}): ${v.toFixed(3)}`} />
+        {order.slice(0, show).map((k) => (
+          <div key={k}>
+            <Heatmap
+              rows={h}
+              cols={w}
+              at={(r, col) => data[(r * w + col) * c + k]}
+              scale={absMax(data, k, data.length, c)}
+              describe={(r, col, v) => `filter ${k + 1}, pixel (${r + 1}, ${col + 1}): ${v.toFixed(3)}. Click to see how.`}
+              onPick={ctx ? (r, col) => ctx.pick(layer.key, (r * w + col) * c + k) : undefined}
+              pickedCell={picked >= 0 && picked % c === k ? { r: Math.floor(picked / c / w), c: Math.floor(picked / c) % w } : undefined}
+            />
+            <span className="block text-center font-mono text-[9px] text-muted">#{k + 1}</span>
+          </div>
         ))}
       </div>
       <p className="mt-1.5 text-[11px] text-muted">
-        {show < c ? `First ${show} of ${c} channels. ` : `All ${c} channels. `}Each is one filter&apos;s answer to &ldquo;is my pattern here?&rdquo;: pink where yes, blue where the opposite.
+        {show < c ? `The ${show} strongest of ${c} filters. ` : `All ${c} filters, strongest first. `}Each is one filter&apos;s answer to &ldquo;is my pattern here?&rdquo;: pink where yes, blue where the opposite. Click any pixel to see the sum that made it.
       </p>
     </div>
   );
@@ -407,7 +471,7 @@ function Picture({ data, h, w, c }: { data: Float32Array; h: number; w: number; 
   );
 }
 
-function Bars({ data, labels, colour = "var(--accent)", max = 96 }: { data: Float32Array | number[]; labels?: string[]; colour?: string; max?: number }) {
+function Bars({ data, labels, colour = "var(--accent)", max = 96, onPick }: { data: Float32Array | number[]; labels?: string[]; colour?: string; max?: number; onPick?: (index: number) => void }) {
   const shown = Math.min(data.length, max);
   let scale = 0;
   for (let i = 0; i < shown; i++) scale = Math.max(scale, Math.abs(data[i]));
@@ -417,7 +481,16 @@ function Bars({ data, labels, colour = "var(--accent)", max = 96 }: { data: Floa
         {Array.from({ length: shown }, (_, i) => {
           const v = data[i] / (scale || 1);
           return (
-            <div key={i} className="relative h-full flex-1" title={`${labels?.[i] ?? i}: ${data[i].toFixed(3)}`}>
+            <div
+              key={i}
+              className={cn("relative h-full flex-1", onPick && "cursor-pointer hover:bg-ink/10")}
+              title={`${labels?.[i] ?? i}: ${data[i].toFixed(3)}${onPick ? ". Click to see how." : ""}`}
+              onClick={(event) => {
+                if (!onPick) return;
+                event.stopPropagation();
+                onPick(i);
+              }}
+            >
               <div className="absolute inset-x-0 rounded-[1px]" style={{ background: v >= 0 ? colour : "#5fb4ff", top: v >= 0 ? `${50 - v * 50}%` : "50%", height: `${Math.abs(v) * 50}%` }} />
             </div>
           );
@@ -498,6 +571,7 @@ function topK(probs: number[], k: number) {
 // -- What each layer shows -----------------------------------------------------------
 
 function Attention({ layer }: { layer: Layer }) {
+  const ctx = useContext(InteractContext);
   const [heads, q, k] = layer.attention!.shape;
   const data = layer.attention!.data;
   const [head, setHead] = useState(0);
@@ -505,12 +579,24 @@ function Attention({ layer }: { layer: Layer }) {
   const keys = layer.keys ?? [];
   const at = (h: number) => (r: number, c: number) => data[(h * q + r) * k + c];
   const limit = Math.min(q, 48);
+  const token = Math.min(ctx?.token ?? q - 1, q - 1);
+  // The picked token's attention in this head, biggest first.
+  const focus = Array.from({ length: k }, (_, j) => ({ label: keys[j] ?? String(j), p: data[(head * q + token) * k + j] }))
+    .filter((item) => item.p > 0)
+    .sort((a, b) => b.p - a.p)
+    .slice(0, 6);
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
+      <div className="rounded-lg bg-surface-2 p-2.5">
+        <p className="mb-1.5 text-[12px]">
+          In head {head + 1}, <span className="rounded bg-ink/10 px-1 font-mono">{rows[token]}</span> takes its information from:
+        </p>
+        <Ranked items={focus} mono />
+      </div>
       <div className="flex flex-wrap gap-1.5">
         {Array.from({ length: heads }, (_, h) => (
-          <button key={h} type="button" onClick={() => setHead(h)} className={cn("w-14 rounded-md border p-1 text-left", h === head ? "border-accent" : "border-line hover:border-muted")}>
-            <Heatmap rows={Math.min(q, 24)} cols={Math.min(k, 24)} at={at(h)} scale={1} sequential />
+          <button key={h} type="button" onClick={(event) => { event.stopPropagation(); setHead(h); }} className={cn("w-14 rounded-md border p-1 text-left", h === head ? "border-accent" : "border-line hover:border-muted")}>
+            <Heatmap rows={Math.min(q, 24)} cols={Math.min(k, 24)} at={at(h)} scale={1} sequential highlightRow={token < 24 ? token : undefined} />
             <span className="mt-0.5 block text-center font-mono text-[9.5px] text-muted">head {h + 1}</span>
           </button>
         ))}
@@ -523,10 +609,12 @@ function Attention({ layer }: { layer: Layer }) {
         sequential
         rowLabels={rows.slice(0, limit)}
         colLabels={keys.slice(0, Math.min(k, 48))}
-        describe={(r, c, v) => `"${rows[r]}" looks at "${keys[c]}": ${(v * 100).toFixed(1)}%`}
+        highlightRow={token}
+        onPick={ctx ? (r) => ctx.setToken(r) : undefined}
+        describe={(r, c, v) => `"${rows[r]}" looks at "${keys[c]}": ${(v * 100).toFixed(1)}%. Click to follow "${rows[r]}".`}
       />
       <p className="text-[11px] text-muted">
-        Head {head + 1}: each row is a token, each column a token it can look at, and brightness is how much of that token&apos;s value it takes. Rows add up to 100%.
+        Each row is a token, each column a token it can look at, and brightness is how much it takes from it. Rows add up to 100%. Click a row to follow that token through every layer.
         {layer.node.op === "attention" && (layer.node.args.causal === undefined || layer.node.args.causal === true || layer.node.args.causal === "true") ? " The empty upper triangle is the causal mask: no peeking ahead." : ""}
       </p>
     </div>
@@ -534,22 +622,43 @@ function Attention({ layer }: { layer: Layer }) {
 }
 
 function Sequence({ layer, used }: { layer: Layer; used: number }) {
+  const ctx = useContext(InteractContext);
   const [s, d] = layer.shape;
   const rows = Math.min(s, Math.max(used, 1), 48);
   const cols = Math.min(d, 96);
   const data = layer.data;
   const scale = useMemo(() => absMax(data, 0, rows * d), [data, rows, d]);
+  const picked = ctx?.picked?.key === layer.key ? ctx.picked.index : -1;
   return (
     <div>
-      <Heatmap rows={rows} cols={cols} at={(r, c) => data[r * d + c]} scale={scale} rowLabels={layer.rows?.slice(0, rows)} rowHeight={rows > 24 ? 6 : 10} describe={(r, c, v) => `"${layer.rows?.[r] ?? r}", feature ${c}: ${v.toFixed(3)}`} />
+      <Heatmap
+        rows={rows}
+        cols={cols}
+        at={(r, c) => data[r * d + c]}
+        scale={scale}
+        rowLabels={layer.rows?.slice(0, rows)}
+        rowHeight={rows > 24 ? 6 : 10}
+        highlightRow={ctx?.token}
+        pickedCell={picked >= 0 ? { r: Math.floor(picked / d), c: picked % d } : undefined}
+        onPick={
+          ctx
+            ? (r, c) => {
+                ctx.setToken(r);
+                ctx.pick(layer.key, r * d + c);
+              }
+            : undefined
+        }
+        describe={(r, c, v) => `"${layer.rows?.[r] ?? r}", number ${c + 1}: ${v.toFixed(3)}. Click to see how it was made.`}
+      />
       <p className="mt-1.5 text-[11px] text-muted">
-        One row per token{rows < s ? ` (first ${rows} of ${s})` : ""}, {cols < d ? `first ${cols} of ${d}` : d} numbers each. Pink is positive, blue negative.
+        One row per token{rows < s ? ` (first ${rows} of ${s})` : ""}, {cols < d ? `first ${cols} of ${d}` : d} numbers each: the token&apos;s meaning so far, as the model stores it. Click a number to see how it was computed.
       </p>
     </div>
   );
 }
 
 export function Output({ layer, trace }: { layer: Layer; trace: Trace }) {
+  const ctx = useContext(InteractContext);
   const { task } = trace;
   const data = layer.data;
   if (layer.shape.length === 1 && trace.classes) {
@@ -567,7 +676,7 @@ export function Output({ layer, trace }: { layer: Layer; trace: Trace }) {
     return String(i);
   };
   if (task.kind === "language-modelling") {
-    const last = Math.min(trace.used, s) - 1;
+    const last = Math.min(ctx?.token ?? trace.used - 1, s - 1);
     const probs = row(last);
     return (
       <div className="space-y-2">
@@ -583,9 +692,19 @@ export function Output({ layer, trace }: { layer: Layer; trace: Trace }) {
     <div className="space-y-1.5">
       <div className="flex flex-wrap gap-0.5 font-mono text-[13px]">
         {guesses.map((g, r) => (
-          <span key={r} className="grid w-5 place-items-center rounded-sm py-0.5" style={{ background: `color-mix(in oklab, var(--accent) ${Math.round(g.p * 70)}%, transparent)` }} title={`${(g.p * 100).toFixed(0)}% sure`}>
+          <button
+            key={r}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              ctx?.setToken(r);
+            }}
+            className={cn("grid w-5 place-items-center rounded-sm py-0.5", ctx?.token === r && "ring-1 ring-ink")}
+            style={{ background: `color-mix(in oklab, var(--accent) ${Math.round(g.p * 70)}%, transparent)` }}
+            title={`${(g.p * 100).toFixed(0)}% sure`}
+          >
             {decode(g.i)}
-          </span>
+          </button>
         ))}
       </div>
       <p className="text-[11px] text-muted">The most likely token at each position; stronger colour means more confident.</p>
@@ -630,6 +749,12 @@ function LayerCard({ layer, index, trace, last, state, onFocus }: { layer: Layer
   const [ref, seen] = useSeen<HTMLElement>();
   const words = useMemo(() => explain(layer.node, layer.inputShapes, layer.outputShape), [layer.node, layer.inputShapes, layer.outputShape]);
   const numbers = useMemo(() => stats(layer.data), [layer.data]);
+  const ctx = useContext(InteractContext);
+  const inputs = useMemo(() => layer.inputs.map((key) => ctx?.byKey.get(key)).filter((item): item is Layer => !!item), [layer.inputs, ctx?.byKey]);
+  const said = useMemo(() => insight(layer, inputs, ctx?.token ?? 0), [layer, inputs, ctx?.token]);
+  const lens = ctx?.lens.get(layer.key);
+  const picked = ctx?.picked?.key === layer.key ? ctx.picked.index : null;
+  const work = useMemo(() => (picked === null || !ctx ? null : working(layer, inputs, picked, () => ctx.weights(layer.key))), [picked, layer, inputs, ctx]);
   const category = OPS[layer.node.op]?.category ?? "reshape";
   const colour = CATEGORY_COLOURS[category];
   const isInput = layer.node.op === "input";
@@ -639,13 +764,14 @@ function LayerCard({ layer, index, trace, last, state, onFocus }: { layer: Layer
     if (layer.shape.length === 3) return <Maps layer={layer} image={isInput} />;
     if (layer.shape.length === 2) return <Sequence layer={layer} used={trace.used} />;
     if (layer.shape.length === 1 && isInput) return null;
-    if (layer.shape.length === 1) return <Bars data={layer.data} colour={colour} />;
+    if (layer.shape.length === 1) return <Bars data={layer.data} colour={colour} onPick={ctx ? (i) => ctx.pick(layer.key, i) : undefined} />;
     return null;
   };
   return (
     <article
       ref={ref}
       data-step={index}
+      data-key={layer.key}
       onClick={onFocus}
       className={cn(
         "relative rounded-xl border bg-surface transition-[opacity,border-color,box-shadow] duration-500",
@@ -674,7 +800,49 @@ function LayerCard({ layer, index, trace, last, state, onFocus }: { layer: Layer
               </div>
             )}
             <p className="mt-2 text-[12.5px] leading-relaxed">{words.words}</p>
+            {said && (
+              <p className="mt-2 rounded-lg border-l-2 border-accent bg-accent/5 px-2.5 py-1.5 text-[12.5px] leading-relaxed">
+                <span className="font-semibold text-accent">What happened: </span>
+                {said}
+              </p>
+            )}
+            {lens && (
+              <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+                <span className="text-muted">If the model stopped here, it would say</span>
+                {lens.map((guess, i) => (
+                  <span key={i} className={cn("rounded px-1.5 py-0.5 font-mono", i === 0 ? "bg-accent/20 font-semibold" : "bg-surface-2 text-muted")}>
+                    {ctx!.decode(guess.id)} {(guess.p * 100).toFixed(0)}%
+                  </span>
+                ))}
+              </p>
+            )}
             <div className="mt-3">{seen ? visual() : <div className="h-24 rounded-md bg-surface-2" />}</div>
+            {picked !== null && (
+              <div className="mt-3 rounded-lg border border-[#f7b955]/50 bg-[#f7b955]/5 p-2.5 text-[12px]" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">How {work?.target ?? "this number"} was made</span>
+                  <button type="button" onClick={() => ctx?.pick("", -1)} className="text-[11px] text-muted hover:text-ink">
+                    close
+                  </button>
+                </div>
+                {work ? (
+                  <div className="mt-1.5 space-y-0.5 font-mono text-[11.5px]">
+                    {work.lines.map((line, i) => (
+                      <div key={i} className="flex justify-between gap-3">
+                        <span className="min-w-0 truncate text-muted">{line.text}</span>
+                        {line.value !== undefined && <span className={line.value >= 0 ? "text-[#f0569f]" : "text-[#5fb4ff]"}>{line.value >= 0 ? "+" : "−"}{Math.abs(line.value).toFixed(4)}</span>}
+                      </div>
+                    ))}
+                    <div className="mt-1 flex justify-between border-t border-line pt-1 font-semibold">
+                      <span>=</span>
+                      <span>{work.result.toFixed(4)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-muted">This layer combines many weights at once (attention, a whole feed-forward network); its working is not broken down number by number. Click a number in the layer before or after it.</p>
+                )}
+              </div>
+            )}
             {seen && !isInput && !last && (
               <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-3">
                 <Histogram data={layer.data} before={layer.before} />
@@ -702,6 +870,9 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
   const { value, error } = usePreparedModel(slot, data?.model);
   const [trace, setTrace] = useState<{ value: Trace | null; error: string | null }>({ value: null, error: null });
   const list = useRef<HTMLDivElement>(null);
+  // What the reader picked: a token to follow (the last one typed, until they choose), and a number to explain. A new input starts fresh.
+  const [chosen, setChosen] = useState<number | null>(null);
+  const [picked, setPicked] = useState<{ key: string; index: number } | null>(null);
 
   useEffect(() => {
     if (!value) return;
@@ -711,6 +882,8 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
         if (!live) return;
         try {
           setTrace({ value: runTrace(lab, value, inputs), error: null });
+          setChosen(null);
+          setPicked(null);
         } catch (caught) {
           setTrace({ value: null, error: caught instanceof Error ? caught.message : String(caught) });
         }
@@ -724,6 +897,66 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
 
   const layers = useMemo(() => trace.value?.layers ?? [], [trace.value]);
   const now = layers.length ? Math.round(cursor * (layers.length - 1)) : 0;
+
+  const used = trace.value?.used ?? 1;
+  const token = Math.min(chosen ?? used - 1, used - 1);
+  const byKey = useMemo(() => new Map(layers.map((layer) => [layer.key, layer])), [layers]);
+  // Weights are read from the graph that made this trace, never a newer one still waiting for its own trace.
+  const graph = trace.value?.graph;
+  const cache = useRef(new Map<string, Record<string, { shape: number[]; data: Float32Array }>>());
+  useEffect(() => cache.current.clear(), [graph]);
+  const weights = useCallback(
+    (key: string) => {
+      if (!graph) return {};
+      const known = cache.current.get(key);
+      if (known) return known;
+      // The graph may already be freed while its replacement is still tracing.
+      let read: Record<string, { shape: number[]; data: Float32Array }> = {};
+      try {
+        read = graph.weights(key);
+      } catch {
+        return read;
+      }
+      cache.current.set(key, read);
+      return read;
+    },
+    [graph],
+  );
+  // The logit lens: every residual-stream layer of the output's sequence, read out at the picked token.
+  const lens = useMemo(() => {
+    const out = new Map<string, { id: number; p: number }[]>();
+    const head = [...layers].reverse().find((layer) => layer.node.op === "lmhead");
+    const before = head && byKey.get(head.inputs[0]);
+    const into = before && byKey.get(before.inputs[0]);
+    if (!graph || !head || !into) return out;
+    const width = into.shape[1];
+    const stream = layers.filter((layer) => layer.rows === head.rows && layer.shape.length === 2 && layer.shape[1] === width && ["embedding", "posembed", "add"].includes(layer.node.op));
+    if (!stream.length) return out;
+    const row = Math.min(token, head.shape[0] - 1);
+    let read: ReturnType<GraphModel["readout"]> = null;
+    try {
+      read = graph.readout(stream.map((layer) => layer.data.slice(row * width, (row + 1) * width)), 3);
+    } catch {
+      return out;
+    }
+    read?.forEach((guesses, i) => out.set(stream[i].key, guesses));
+    return out;
+  }, [layers, byKey, graph, token]);
+  const decodeToken = useCallback(
+    (id: number) => {
+      const t = trace.value;
+      if (!t) return String(id);
+      if (t.decode) return t.decode(id);
+      if (t.task.kind === "seq2seq") return id === 0 ? "▸" : "0123456789abcdef"[id - 1] ?? "?";
+      return id === 0 ? "↵" : id === 1 ? "␣" : id >= 2 && id <= 95 ? String.fromCharCode(id + 31) : "?";
+    },
+    [trace.value],
+  );
+  const interact = useMemo<Interact>(
+    () => ({ token, setToken: setChosen, picked, pick: (key, index) => setPicked(key ? { key, index } : null), byKey, weights, lens, decode: decodeToken }),
+    [token, picked, byKey, weights, lens, decodeToken],
+  );
+  const tokens = layers.find((layer) => layer.rows && layer.node.op === "input")?.rows ?? layers.find((layer) => layer.rows)?.rows;
 
   useEffect(() => onSteps(layers.length), [layers.length, onSteps]);
 
@@ -790,7 +1023,50 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
               />
             ))}
           </div>
+          <InteractContext.Provider value={interact}>
           <div ref={list} className="scroll-quiet min-h-0 flex-1 space-y-0 overflow-y-auto px-3 py-3">
+            {tokens && (
+              <div className="sticky top-0 z-10 -mx-3 mb-3 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur">
+                <p className="mb-1 text-[11px] text-muted">Follow a token through every layer:</p>
+                <div className="scroll-quiet flex gap-0.5 overflow-x-auto font-mono text-[12.5px]">
+                  {tokens.slice(0, used).map((label, i) => (
+                    <button key={i} type="button" onClick={() => setChosen(i)} className={cn("flex-none rounded px-1.5 py-0.5", i === token ? "bg-accent font-semibold text-accent-ink" : "bg-surface-2 hover:bg-surface-3")}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {lens.size > 0 && (
+              <div className="mb-4 rounded-xl border border-line bg-surface-2 p-3">
+                <p className="text-[11px] font-medium tracking-wide text-muted uppercase">How the prediction forms</p>
+                <p className="mt-0.5 mb-2 text-[11.5px] text-muted">
+                  After <span className="font-mono text-ink">{tokens?.[token]}</span>, what the model would guess if it stopped at each layer. Watch the answer sharpen as the layers add their part.
+                </p>
+                <ol className="space-y-1">
+                  {layers
+                    .filter((layer) => lens.has(layer.key))
+                    .map((layer) => {
+                      const guesses = lens.get(layer.key)!;
+                      return (
+                        <li key={layer.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-2 text-[11.5px]">
+                          <button type="button" onClick={() => list.current?.querySelector(`[data-key="${layer.key}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" })} className="truncate text-left text-muted hover:text-ink">
+                            {layer.block ? `${layer.block.replace(/ of \d+$/, "")} · ` : ""}
+                            {layer.node.op === "add" ? `after ${byKey.get(layer.inputs[0])?.node.label ?? "the block"}` : (layer.node.label ?? layer.node.op)}
+                          </button>
+                          <span className="flex items-center gap-1.5">
+                            <span className="relative h-4 flex-1 overflow-hidden rounded bg-surface-3">
+                              <span className="absolute inset-y-0 left-0 rounded bg-accent/70 transition-[width] duration-500" style={{ width: `${Math.max(2, guesses[0].p * 100)}%` }} />
+                              <span className="relative px-1.5 font-mono text-[11px]">{decodeToken(guesses[0].id)}</span>
+                            </span>
+                            <span className="w-9 text-right font-mono text-[10.5px] text-muted">{(guesses[0].p * 100).toFixed(0)}%</span>
+                          </span>
+                        </li>
+                      );
+                    })}
+                </ol>
+              </div>
+            )}
             {output && trace.value.task && (
               <div className="mb-4 rounded-xl border border-line bg-surface-2 p-3">
                 <p className="mb-2 text-[11px] font-medium tracking-wide text-muted uppercase">{trace.value.task.label}</p>
@@ -812,6 +1088,7 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
               );
             })}
           </div>
+          </InteractContext.Provider>
         </div>
       )}
     </section>

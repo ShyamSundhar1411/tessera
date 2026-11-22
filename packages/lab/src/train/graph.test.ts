@@ -235,4 +235,19 @@ describe("trace", () => {
     expect(layers.find((layer) => layer.attention)!.attention!.shape).toEqual([2, 8, 8]);
     graph.dispose();
   });
+
+  test("the logit lens on the last hidden state gives the model's own prediction", () => {
+    const model = shrinkLanguageModel(catalogModel("gpt2")!, { dim: 32, layers: 2, heads: 2, vocab: 20, seqLen: 8 });
+    const graph = buildGraph(model, { seed: 3 });
+    const layers = traceArrays(graph, { [graph.inputs[0].id]: { data: Int32Array.from([1, 2, 3, 4, 5, 6, 7, 8]), shape: [8] } });
+    const head = layers[layers.length - 1];
+    const before = layers.find((layer) => layer.key === layers[layers.length - 2].inputs[0])!;
+    const position = 5;
+    const lens = graph.readout([before.data.slice(position * 32, (position + 1) * 32)], 3)!;
+    const row = Array.from(head.data.subarray(position * 20, (position + 1) * 20));
+    expect(lens[0][0].id).toBe(row.indexOf(Math.max(...row)));
+    expect(lens[0].length).toBe(3);
+    expect(Object.keys(graph.weights(layers.find((layer) => layer.nodeId.startsWith("attention"))!.key))).toContain("_q");
+    graph.dispose();
+  });
 });

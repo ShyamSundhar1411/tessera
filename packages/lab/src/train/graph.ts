@@ -59,6 +59,19 @@ export interface GraphModel {
    * tensors (disposeTrace).
    */
   trace(feeds: Record<string, tf.Tensor>): TraceStep[];
+  /**
+   * One step's weights as plain arrays, by part ("" for the main matrix,
+   * "_bias", "_gamma"...), plus batch norm's running statistics. Tied layers
+   * get the shared table as "table". For showing how a value was computed.
+   */
+  weights(key: string): Record<string, { shape: number[]; data: Float32Array }>;
+  /**
+   * What the model would predict from hidden states taken at any layer: each
+   * vector goes through the final norm and the output layer (the "logit
+   * lens"). Returns the top k token ids and probabilities per vector, or null
+   * when the model does not end in an output layer over a vocabulary.
+   */
+  readout(vectors: Float32Array[], k: number): { id: number; p: number }[][] | null;
   dispose(): void;
 }
 
@@ -68,6 +81,8 @@ export interface TraceStep {
   nodeId: string;
   /** Which copy of a repeated block this is (0 when not repeated). */
   copy: number;
+  /** Keys of the steps this one read, in order. */
+  inputs: string[];
   value: tf.Tensor;
   attention?: tf.Tensor;
 }
@@ -386,9 +401,49 @@ export function buildGraph(model: Model, options: GraphOptions = {}): GraphModel
       });
       values.set(step.key, kept[0]);
       const copy = Number(/_r(\d+)/.exec(step.suffix)?.[1] ?? 0);
-      out.push({ key: step.key, nodeId: step.node.id, copy, value: kept[0], attention: kept[1] });
+      out.push({ key: step.key, nodeId: step.node.id, copy, inputs: step.inputs, value: kept[0], attention: kept[1] });
     }
     return out;
+  };
+
+  const weights = (key: string) => {
+    const p = params.get(key);
+    const out: Record<string, { shape: number[]; data: Float32Array }> = {};
+    if (!p) return out;
+    for (const [part, variable] of Object.entries({ ...p.w, ...p.state })) out[part] = { shape: variable.shape, data: Float32Array.from(variable.dataSync()) };
+    const node = steps.find((step) => step.key === key)?.node;
+    if (node && isTrue(node.args.tied) && table) out.table = { shape: table.shape, data: Float32Array.from(table.dataSync()) };
+    return out;
+  };
+
+  // The logit lens: the output layer and the norm in front of it, applied to any hidden state.
+  const headStep = [...steps].reverse().find((step) => step.node.op === "lmhead");
+  const normStep = headStep ? steps.find((step) => step.key === headStep.inputs[0] && (step.node.op === "layernorm" || step.node.op === "rmsnorm")) : undefined;
+  const readout = (vectors: Float32Array[], k: number) => {
+    if (!headStep || !vectors.length) return null;
+    const head = params.get(headStep.key)!;
+    const matrix = isTrue(headStep.node.args.tied) ? table : head.w[""];
+    if (!matrix) return null;
+    const result = tf.tidy(() => {
+      let x: tf.Tensor = tf.stack(vectors.map((v) => tf.tensor1d(v)));
+      if (normStep) {
+        const w = params.get(normStep.key)!.w;
+        if (normStep.node.op === "rmsnorm") x = rmsNorm(x, w._gamma);
+        else {
+          const { mean, variance } = tf.moments(x, -1, true);
+          x = tf.mul(tf.sub(x, mean), tf.rsqrt(tf.add(variance, 1e-5)));
+          x = tf.mul(x, w._gamma);
+          if (w._beta) x = tf.add(x, w._beta);
+        }
+      }
+      const logits = isTrue(headStep.node.args.tied) ? tf.matMul(x, matrix, false, true) : tf.matMul(x, matrix);
+      return tf.topk(tf.softmax(logits), k);
+    });
+    const ids = result.indices.arraySync() as number[][];
+    const ps = result.values.arraySync() as number[][];
+    result.indices.dispose();
+    result.values.dispose();
+    return ids.map((row, i) => row.map((id, j) => ({ id, p: ps[i][j] })));
   };
 
   const forward = (step: Step, xs: tf.Tensor[], p: Params, feeds: Record<string, tf.Tensor>, run: ApplyOptions): tf.Tensor => {
@@ -594,6 +649,8 @@ export function buildGraph(model: Model, options: GraphOptions = {}): GraphModel
     paramCount,
     apply,
     trace,
+    weights,
+    readout,
     dispose() {
       for (const p of params.values()) for (const v of [...Object.values(p.w), ...Object.values(p.state)]) v.dispose();
     },
@@ -821,6 +878,8 @@ export interface TracedLayer {
   key: string;
   nodeId: string;
   copy: number;
+  /** Keys of the layers this one read. */
+  inputs: string[];
   /** tf's layout without the batch: [H, W, C] for images, [seq, features] for sequences. */
   shape: number[];
   data: Float32Array;
@@ -842,6 +901,7 @@ export function traceArrays(graph: GraphModel, feeds: Record<string, PlainFeed>)
       key: step.key,
       nodeId: step.nodeId,
       copy: step.copy,
+      inputs: step.inputs,
       shape: step.value.shape.slice(1),
       data: Float32Array.from(step.value.dataSync()),
       attention: step.attention ? { shape: step.attention.shape.slice(1), data: Float32Array.from(step.attention.dataSync()) } : undefined,
