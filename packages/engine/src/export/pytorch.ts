@@ -18,11 +18,11 @@ const HELPERS: Record<string, string> = {
     x1, x2 = x[..., :half], x[..., half:]
     return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)`,
   attention: `class Attention(nn.Module):
-    """Causal self-attention. kv_heads < heads shares each key/value head across a group of query heads."""
+    """Self-attention, causal unless told otherwise. kv_heads < heads shares each key/value head across a group of query heads."""
 
-    def __init__(self, dim, heads, kv_heads, head_dim, qkv_bias=False, o_bias=False, qk_norm=False, window=0, rope=True):
+    def __init__(self, dim, heads, kv_heads, head_dim, qkv_bias=False, o_bias=False, qk_norm=False, window=0, rope=True, causal=True):
         super().__init__()
-        self.heads, self.kv_heads, self.head_dim, self.window, self.rope = heads, kv_heads, head_dim, window, rope
+        self.heads, self.kv_heads, self.head_dim, self.window, self.rope, self.causal = heads, kv_heads, head_dim, window, rope, causal
         self.q = nn.Linear(dim, heads * head_dim, bias=qkv_bias)
         self.k = nn.Linear(dim, kv_heads * head_dim, bias=qkv_bias)
         self.v = nn.Linear(dim, kv_heads * head_dim, bias=qkv_bias)
@@ -41,8 +41,46 @@ const HELPERS: Record<string, string> = {
         if self.window:
             i = torch.arange(s, device=x.device)
             mask = (i[None, :] <= i[:, None]) & (i[:, None] - i[None, :] < self.window)
-        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=mask is None, enable_gqa=self.kv_heads != self.heads)
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=self.causal and mask is None, enable_gqa=self.kv_heads != self.heads)
         return self.o(out.transpose(1, 2).reshape(b, s, -1))`,
+  cross: `class CrossAttention(nn.Module):
+    """Cross-attention: queries from the decoder stream, keys and values from the encoder output."""
+
+    def __init__(self, dim, memory_dim, heads, kv_heads, head_dim, bias=False):
+        super().__init__()
+        self.heads, self.kv_heads, self.head_dim = heads, kv_heads, head_dim
+        self.q = nn.Linear(dim, heads * head_dim, bias=bias)
+        self.k = nn.Linear(memory_dim, kv_heads * head_dim, bias=bias)
+        self.v = nn.Linear(memory_dim, kv_heads * head_dim, bias=bias)
+        self.o = nn.Linear(heads * head_dim, dim, bias=bias)
+
+    def forward(self, x, memory):
+        b, s, _ = x.shape
+        m = memory.shape[1]
+        q = self.q(x).view(b, s, self.heads, self.head_dim).transpose(1, 2)
+        k = self.k(memory).view(b, m, self.kv_heads, self.head_dim).transpose(1, 2)
+        v = self.v(memory).view(b, m, self.kv_heads, self.head_dim).transpose(1, 2)
+        out = F.scaled_dot_product_attention(q, k, v, enable_gqa=self.kv_heads != self.heads)
+        return self.o(out.transpose(1, 2).reshape(b, s, -1))`,
+  sine: `class SinePositions(nn.Module):
+    """The original Transformer's fixed positions: sine and cosine waves, no weights."""
+
+    def forward(self, x):
+        s, d = x.shape[1], x.shape[2]
+        position = torch.arange(s, device=x.device, dtype=torch.float32)[:, None]
+        rate = torch.exp(torch.arange(0, d, 2, device=x.device, dtype=torch.float32) * (-math.log(10000.0) / d))
+        table = torch.zeros(s, d, device=x.device, dtype=x.dtype)
+        table[:, 0::2], table[:, 1::2] = torch.sin(position * rate), torch.cos(position * rate)
+        return x + table`,
+  cls: `class ClassToken(nn.Module):
+    """One learned token placed in front of the sequence (BERT, ViT)."""
+
+    def __init__(self, dim):
+        super().__init__()
+        self.token = nn.Parameter(torch.zeros(1, 1, dim))
+
+    def forward(self, x):
+        return torch.cat([self.token.expand(x.shape[0], -1, -1), x], dim=1)`,
   mla: `class LatentAttention(nn.Module):
     """Multi-head latent attention (DeepSeek): keys and values pass through a small shared latent, which is all the cache keeps."""
 
@@ -114,6 +152,15 @@ const HELPERS: Record<string, string> = {
             extra = expert(flat)
             out = out + (torch.sigmoid(self.shared_gate(flat)) * extra if self.shared_gate is not None else extra)
         return out.view(b, s, d)`,
+  types: `class TokenTypeEmbedding(nn.Module):
+    """BERT's segment table: every token here is segment 0, so its first row is added to all of them."""
+
+    def __init__(self, types, dim):
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(types, dim))
+
+    def forward(self, x, segments=None):
+        return x + (self.weight[segments] if segments is not None else self.weight[0])`,
   posembed: `class PositionEmbedding(nn.Module):
     """Learned position vectors added to the token vectors (GPT-2)."""
 
@@ -144,6 +191,8 @@ interface Ctx {
   analysis: Analysis;
   model: Model;
   needs: Set<string>;
+  /** How forward() reaches the top-level module ("self"; inside a block class, the model is not reachable). */
+  root: string;
 }
 
 /** The constructor for a node's module, or null when it is a plain function in forward(). */
@@ -174,15 +223,33 @@ function moduleFor(node: Node, ctx: Ctx): string | null {
     case "linear":
       return `nn.Linear(${features}, ${a.out}, bias=${bool(a.bias ?? true)})`;
     case "embedding":
-      return `nn.Embedding(${a.vocab}, ${a.dim})`;
+      // A tied embedding reuses another one's table, so it has no module of its own.
+      return a.tied === true || a.tied === "true" ? null : `nn.Embedding(${a.vocab}, ${a.dim})`;
     case "posembed":
+      if (a.fixed === true || a.fixed === "true") {
+        ctx.needs.add("sine");
+        return "SinePositions()";
+      }
+      if (a.types === true || a.types === "true") {
+        ctx.needs.add("types");
+        return `TokenTypeEmbedding(${num(a.max, 2)}, ${features})`;
+      }
       ctx.needs.add("posembed");
       return `PositionEmbedding(${num(a.max, input[0])}, ${features})`;
+    case "cross_attention": {
+      ctx.needs.add("cross");
+      const memory = shapeOf(node.inputs[1] ?? "");
+      const heads = num(a.heads, 1);
+      return `CrossAttention(${features}, ${memory[memory.length - 1]}, heads=${heads}, kv_heads=${num(a.kv, heads)}, head_dim=${num(a.head_dim, Math.floor(features / heads))}, bias=${bool(a.bias)})`;
+    }
+    case "cls_token":
+      ctx.needs.add("cls");
+      return `ClassToken(${features})`;
     case "attention": {
       ctx.needs.add("attention");
       ctx.needs.add("rope");
       const heads = num(a.heads, 1);
-      return `Attention(${features}, heads=${heads}, kv_heads=${num(a.kv, heads)}, head_dim=${num(a.head_dim, Math.floor(features / heads))}, qkv_bias=${bool(a.qkv_bias)}, o_bias=${bool(a.o_bias)}, qk_norm=${bool(a.qk_norm)}, window=${num(a.window, 0)}, rope=${bool(a.rope ?? ctx.model.kind === "language")})`;
+      return `Attention(${features}, heads=${heads}, kv_heads=${num(a.kv, heads)}, head_dim=${num(a.head_dim, Math.floor(features / heads))}, qkv_bias=${bool(a.qkv_bias)}, o_bias=${bool(a.o_bias)}, qk_norm=${bool(a.qk_norm)}, window=${num(a.window, 0)}, rope=${bool(a.rope ?? ctx.model.kind === "language")}, causal=${bool(a.causal ?? true)})`;
     }
     case "mla":
       ctx.needs.add("mla");
@@ -229,6 +296,20 @@ function expression(node: Node, inputs: string[], self: string, ctx: Ctx): strin
       return `torch.flatten(${x}, 1)`;
     case "identity":
       return x;
+    case "to_sequence":
+      return `${x}.flatten(2).transpose(1, 2)`;
+    case "take_first":
+      return `${x}[:, 0]`;
+    case "mean_pool":
+      return `${x}.mean(dim=1)`;
+    case "cross_attention":
+      return `${self}.${py(node.id)}(${inputs[0]}, ${inputs[1]})`;
+    case "embedding":
+      if (node.args.tied === true || node.args.tied === "true") {
+        const table = ctx.model.nodes.find((item) => item.op === "embedding" && item.args.tied !== true && item.args.tied !== "true");
+        return `${ctx.root}.${py(table?.id ?? node.id)}(${x})`;
+      }
+      return `${self}.${py(node.id)}(${x})`;
     case "add":
       return inputs.join(" + ");
     case "mul":
@@ -260,15 +341,18 @@ export interface ExportOptions {
 
 export function toPyTorch(model: Model, options: ExportOptions = {}): string {
   const analysis = analyze(model);
-  const ctx: Ctx = { analysis, model, needs: new Set() };
+  const ctx: Ctx = { analysis, model, needs: new Set(), root: "self" };
   const name = options.className ?? className(model.name.split("/").pop() ?? "Model");
   const classes: string[] = [];
   const init: string[] = [];
   const forward: string[] = [];
-  const input = model.nodes.find((node) => node.op === "input");
+  const inputs = model.nodes.filter((node) => node.op === "input");
+  const input = inputs[0];
   const inputVar = model.kind === "language" ? "tokens" : "x";
   const rename = new Map<string, string>();
-  if (input) rename.set(input.id, inputVar);
+  // One input is x or tokens; several are named after their labels, such as source_tokens and target_tokens.
+  const inputNames = inputs.map((node, i) => (inputs.length === 1 ? inputVar : py((node.label ?? `input_${i + 1}`).toLowerCase())));
+  inputs.forEach((node, i) => rename.set(node.id, inputNames[i]));
 
   // Repeated top-level blocks become classes; everything else is inlined.
   const repeated = new Map(model.groups.filter((group) => (group.repeat ?? 1) > 1 && !group.parent).map((group) => [group.id, group]));
@@ -292,10 +376,13 @@ export function toPyTorch(model: Model, options: ExportOptions = {}): string {
       const group = repeated.get(blockId)!;
       const members = model.nodes.filter((item) => groupOf(item) === blockId);
       const inner = new Set(members.map((item) => item.id));
-      const entry = members.flatMap((item) => item.inputs).find((id) => !inner.has(id))!;
+      // The block's main input, then anything else it reads from outside (a decoder reads the encoder output).
+      const outside = [...new Set(members.flatMap((item) => item.inputs).filter((id) => !inner.has(id)))];
+      const entry = outside[0];
+      const extras = outside.slice(1);
       const blockClass = className(group.label);
       const blockInit = members.map((item) => [item, moduleFor(item, ctx)] as const).filter(([, mod]) => mod).map(([item, mod]) => `        self.${py(item.id)} = ${mod}`);
-      const blockRename = new Map([[entry, "x"]]);
+      const blockRename = new Map([[entry, "x"], ...extras.map((id, i) => [id, i === 0 ? "memory" : `extra_${i}`] as [string, string])]);
       const body = forwardLines(members, ctx, "self", blockRename).map((line) => `        ${line}`);
       const exit = py(members[members.length - 1].id);
       classes.push(`class ${blockClass}(nn.Module):
@@ -305,13 +392,14 @@ export function toPyTorch(model: Model, options: ExportOptions = {}): string {
         super().__init__()
 ${blockInit.join("\n") || "        pass"}
 
-    def forward(self, x):
+    def forward(self, x${extras.map((_, i) => (i === 0 ? ", memory" : `, extra_${i}`)).join("")}):
 ${body.join("\n")}
         return ${exit}`);
       const list = py(`${group.label}_layers`).toLowerCase();
       init.push(`        self.${list} = nn.ModuleList([${blockClass}() for _ in range(${group.repeat})])`);
       const source = rename.get(entry) ?? py(entry);
-      forward.push(`        ${exit} = ${source}`, `        for layer in self.${list}:`, `            ${exit} = layer(${exit})`);
+      const extraArgs = extras.map((id) => `, ${rename.get(id) ?? py(id)}`).join("");
+      forward.push(`        ${exit} = ${source}`, `        for layer in self.${list}:`, `            ${exit} = layer(${exit}${extraArgs})`);
       rename.set(members[members.length - 1].id, exit);
       continue;
     }
@@ -330,12 +418,12 @@ ${body.join("\n")}
 
   const last = model.nodes[model.nodes.length - 1];
   const result = last ? (rename.get(last.id) ?? py(last.id)) : inputVar;
-  const helperOrder = ["rope", "posembed", "attention", "mla", "mlp", "moe"].filter((key) => ctx.needs.has(key));
+  const helperOrder = ["rope", "sine", "types", "posembed", "cls", "attention", "cross", "mla", "mlp", "moe"].filter((key) => ctx.needs.has(key));
   const shape = input ? String(input.args.shape).split(/[x,]/).map(Number) : [];
   const large = analysis.params > 2e9;
   const example =
     model.kind === "language"
-      ? `torch.randint(0, ${embedding?.args.vocab ?? 1000}, (1, 16))`
+      ? inputs.map(() => `torch.randint(0, ${embedding?.args.vocab ?? 1000}, (1, 16))`).join(", ")
       : `torch.randn(1, ${shape.join(", ")})`;
 
   return `"""
@@ -343,6 +431,8 @@ ${model.name}
 Written by Tessera from the architecture's connections.
 Parameters: ${analysis.params.toLocaleString("en-US")}${analysis.activeParams !== analysis.params ? ` (${analysis.activeParams.toLocaleString("en-US")} active per token)` : ""}
 """
+
+import math
 
 import torch
 import torch.nn as nn
@@ -353,7 +443,7 @@ ${[...helperOrder.map((key) => HELPERS[key]), ...classes].join("\n\n\n")}${helpe
         super().__init__()
 ${init.join("\n") || "        pass"}
 
-    def forward(self, ${inputVar}):
+    def forward(self, ${inputNames.join(", ") || inputVar}):
 ${forward.join("\n")}
         return ${result}
 

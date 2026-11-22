@@ -10,14 +10,18 @@ import qwen25 from "../../configs/Qwen_Qwen2.5-7B.json";
 import qwen3Moe from "../../configs/Qwen_Qwen3-30B-A3B.json";
 import qwen3 from "../../configs/Qwen_Qwen3-8B.json";
 import llama31 from "../../configs/unsloth_Meta-Llama-3.1-8B.json";
+import bert from "../../configs/google-bert_bert-base-uncased.json";
+import roberta from "../../configs/FacebookAI_roberta-base.json";
+import distilbert from "../../configs/distilbert_distilbert-base-uncased.json";
 import { fromHuggingFace } from "../import/huggingface";
 import type { Model } from "../types";
+import { transformerBase, vitB16 } from "./transformers";
 import { cifarCnn, efficientnetB0, lenet5, mnistMlp, mobilenetV2, resnet18, resnet50, vgg16 } from "./vision";
 
 export interface CatalogEntry {
   id: string;
   name: string;
-  shelf: "Language models" | "Image models" | "Small models";
+  shelf: "Language models" | "Encoders and seq2seq" | "Image models" | "Small models";
   blurb: string;
   /** Parameters as the authors publish them, for the tests and the catalog card. */
   published?: string;
@@ -40,6 +44,11 @@ export const CATALOG: CatalogEntry[] = [
   { id: "phi-3-mini", name: "Phi-3 mini", shelf: "Language models", blurb: "A small model with full multi-head attention.", published: "3.8B", build: hf(phi3, "microsoft/Phi-3-mini-4k-instruct") },
   { id: "smollm2-135m", name: "SmolLM2 135M", shelf: "Language models", blurb: "A tiny Llama-style model, small enough to study whole.", published: "135M", build: hf(smollm2, "HuggingFaceTB/SmolLM2-135M") },
   { id: "gpt2", name: "GPT-2", shelf: "Language models", blurb: "The 2019 original: learned positions, LayerNorm, GELU, full attention.", published: "124M", build: hf(gpt2, "openai-community/gpt2") },
+  { id: "transformer-base", name: "Transformer (2017)", shelf: "Encoders and seq2seq", blurb: "The original from Attention Is All You Need: an encoder, a decoder and cross-attention between them.", published: "65M", build: transformerBase },
+  { id: "bert-base", name: "BERT base", shelf: "Encoders and seq2seq", blurb: "A bidirectional encoder: every token sees every other. Read from its config.json.", published: "110M", build: hf(bert, "google-bert/bert-base-uncased") },
+  { id: "roberta-base", name: "RoBERTa base", shelf: "Encoders and seq2seq", blurb: "BERT's layers with a bigger vocabulary and better training.", published: "125M", build: hf(roberta, "FacebookAI/roberta-base") },
+  { id: "distilbert-base", name: "DistilBERT", shelf: "Encoders and seq2seq", blurb: "BERT distilled to half the layers, no pooler.", published: "66M", build: hf(distilbert, "distilbert/distilbert-base-uncased") },
+  { id: "vit-b16", name: "ViT-B/16", shelf: "Image models", blurb: "A transformer that reads an image as a sequence of 16×16 patches.", published: "86.6M", build: vitB16 },
   { id: "vgg16", name: "VGG16", shelf: "Image models", blurb: "Thirteen 3×3 convolutions in a straight line, then big dense layers.", published: "138.4M", build: vgg16 },
   { id: "resnet18", name: "ResNet-18", shelf: "Image models", blurb: "Skip connections around every pair of convolutions.", published: "11.7M", build: resnet18 },
   { id: "resnet50", name: "ResNet-50", shelf: "Image models", blurb: "Bottleneck blocks: squeeze to 1×1, 3×3, expand again.", published: "25.6M", build: resnet50 },

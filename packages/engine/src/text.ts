@@ -105,15 +105,17 @@ export function parseText(source: string): ParseResult {
       kind = m[1] as ModelKind;
       return;
     }
-    if ((m = text.match(/^input\s+(?:(?:image|tokens|vector)\s+)?([\dx×,\s]+)$/))) {
-      const shape = m[1].replace(/\s+/g, "").replace(/×/g, "x");
-      const id = freshId("input");
-      names.set("input", id);
+    // An input, optionally named so later lines can read it: src = input tokens 128
+    if ((m = text.match(/^(?:([A-Za-z_]\w*)\s*=\s*)?input\s+(?:(?:image|tokens|vector)\s+)?([\dx×,\s]+)$/))) {
+      const shape = m[2].replace(/\s+/g, "").replace(/×/g, "x");
+      const id = m[1] && !names.has(m[1]) ? m[1] : freshId("input");
+      if (!names.has("input")) names.set("input", id);
+      names.set(id, id);
       nodes.push({ id, op: "input", args: { shape }, inputs: [], label: "Input", line });
       previous = id;
       const dims = shape.split(/[x,]/).filter(Boolean);
       if (!kind) kind = dims.length === 3 ? "vision" : dims.length === 1 && /tokens/.test(text) ? "language" : dims.length === 1 ? "tabular" : "tabular";
-      if (dims.length === 1 && /tokens/.test(text)) seqLen = Number(dims[0]);
+      if (dims.length === 1 && /tokens/.test(text) && seqLen === undefined) seqLen = Number(dims[0]);
       return;
     }
     if ((m = text.match(/^block\s+"([^"]+)"(?:\s+x(\d+))?(?:\s+kind=(\S+))?\s*\{$/))) {
@@ -149,8 +151,9 @@ export function parseText(source: string): ParseResult {
         return;
       }
       // A join: add(a, b), concat(a, b, axis=1), mul(a, b)
+      // Any operation with several inputs uses call syntax: add(a, b), cross_attention(stream, memory, heads=8).
       const call = step.match(/^(\w+)\((.*)\)\s*(.*)$/);
-      if (call && JOINS.has(call[1])) {
+      if (call && (JOINS.has(call[1]) || OPS[ALIASES[call[1]] ?? call[1]]?.arity === "many")) {
         const op = ALIASES[call[1]] ?? call[1];
         const parts = call[2].split(",").map((part) => part.trim()).filter(Boolean);
         const args: Record<string, ArgValue> = {};
@@ -233,8 +236,10 @@ function formatStep(node: Node): string {
   const main = spec?.main;
   if (main && node.args[main] !== undefined) parts.push(String(node.args[main]));
   for (const [key, raw] of Object.entries(node.args)) {
-    if (key === main || raw === undefined || raw === false) {
-      if (key === "bias" && raw === false) parts.push("nobias");
+    if (key === main || raw === undefined) continue;
+    // A false setting is written out (causal=false, rope=false), since some default to true.
+    if (raw === false) {
+      parts.push(key === "bias" ? "nobias" : `${key}=false`);
       continue;
     }
     parts.push(formatArg(key, raw));
@@ -295,7 +300,8 @@ export function toText(model: Model): string {
 
     if (node.op === "input") {
       flush();
-      lines.push(`input ${model.kind === "language" ? "tokens " : ""}${String(node.args.shape)}`);
+      const many = model.nodes.filter((item) => item.op === "input").length > 1;
+      lines.push(`${many ? `${ident(node.id)} = ` : ""}input ${model.kind === "language" ? "tokens " : ""}${String(node.args.shape)}`);
       previous = node.id;
       continue;
     }

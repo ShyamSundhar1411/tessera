@@ -255,22 +255,23 @@ export const OPS: Record<string, OpSpec> = {
       if (x.length !== 1) throw new ShapeError(`embedding needs token ids [seq], got [${x.join(", ")}]`);
       const vocab = num(args, "vocab");
       const dim = num(args, "dim");
-      return { shape: [x[0], dim], params: vocab * dim, flops: 0 };
+      // A second embedding that shares the first one's table (the original Transformer shares source and target) holds no weights of its own.
+      return { shape: [x[0], dim], params: flag(args, "tied", false) ? 0 : vocab * dim, flops: 0 };
     },
   },
   posembed: {
     category: "embedding",
-    summary: "Learned position embeddings added to each token (GPT-2, BERT).",
+    summary: "Position embeddings added to each token: learned (GPT-2, BERT), fixed sine waves with no weights (fixed, the original Transformer), or a token-type table whose first row is added to every token (types, BERT's segments).",
     arity: "one",
     infer: ([x], args) => {
       const [seq, dim] = sequence(x, "posembed");
       const max = num(args, "max", seq);
-      return { shape: [seq, dim], params: max * dim, flops: seq * dim };
+      return { shape: [seq, dim], params: flag(args, "fixed", false) ? 0 : max * dim, flops: seq * dim };
     },
   },
   attention: {
     category: "attention",
-    summary: "Self-attention. Heads share key/value heads when kv < heads (grouped-query attention).",
+    summary: "Self-attention. Heads share key/value heads when kv < heads (grouped-query attention). causal=false lets every token see every other, as encoders do.",
     arity: "one",
     main: "heads",
     infer: ([x], args) => {
@@ -288,6 +289,62 @@ export const OPS: Record<string, OpSpec> = {
       const span = window > 0 ? Math.min(window, seq) : seq;
       const scores = 2 * 2 * seq * span * heads * hd;
       return { shape: [seq, d], params, flops: 2 * weights * seq + scores };
+    },
+  },
+  cross_attention: {
+    category: "attention",
+    summary: "Cross-attention: the first input asks questions, the second (an encoder's output) supplies keys and values. How a decoder reads the source.",
+    arity: "many",
+    main: "heads",
+    infer: (inputs, args) => {
+      if (inputs.length !== 2) throw new ShapeError("cross_attention reads two inputs: the decoder stream, then the encoder output");
+      const [seq, d] = sequence(inputs[0], "cross_attention");
+      const [memory, dm] = sequence(inputs[1], "cross_attention");
+      const heads = num(args, "heads");
+      const kv = num(args, "kv", heads);
+      const hd = num(args, "head_dim", Math.floor(d / heads));
+      if (heads % kv) throw new ShapeError(`${heads} heads cannot be shared evenly by ${kv} key/value heads`);
+      const bias = flag(args, "bias", false);
+      const weights = d * heads * hd + 2 * dm * kv * hd + heads * hd * d;
+      const params = weights + (bias ? heads * hd + 2 * kv * hd + d : 0);
+      const flops = 2 * (d * heads * hd + heads * hd * d) * seq + 2 * 2 * dm * kv * hd * memory + 2 * 2 * seq * memory * heads * hd;
+      return { shape: [seq, d], params, flops };
+    },
+  },
+  to_sequence: {
+    category: "reshape",
+    summary: "Turns an image's grid of positions into a sequence of tokens: [C, H, W] to [H×W, C]. How a vision transformer reads patches.",
+    arity: "one",
+    infer: ([x]) => {
+      const [c, h, w] = image(x, "to_sequence");
+      return { shape: [h * w, c], params: 0, flops: 0 };
+    },
+  },
+  cls_token: {
+    category: "embedding",
+    summary: "Adds one learned token at the front of the sequence, whose final state summarises it (BERT, ViT).",
+    arity: "one",
+    infer: ([x]) => {
+      const [seq, d] = sequence(x, "cls_token");
+      return { shape: [seq + 1, d], params: d, flops: 0 };
+    },
+  },
+  take_first: {
+    category: "pool",
+    summary: "Keeps only the first token's vector, such as the class token, for a classifier.",
+    arity: "one",
+    infer: ([x]) => {
+      const [, d] = sequence(x, "take_first");
+      return { shape: [d], params: 0, flops: 0 };
+    },
+  },
+  mean_pool: {
+    category: "pool",
+    summary: "Averages over the sequence, one vector for the whole input.",
+    arity: "one",
+    infer: ([x]) => {
+      const [seq, d] = sequence(x, "mean_pool");
+      return { shape: [d], params: 0, flops: seq * d };
     },
   },
   mla: {

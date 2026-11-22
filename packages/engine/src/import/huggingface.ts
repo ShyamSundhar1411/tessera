@@ -32,6 +32,10 @@ export const SUPPORTED_FAMILIES = [
   "deepseek_v2",
   "deepseek_v3",
   "gpt2",
+  "bert",
+  "roberta",
+  "xlm-roberta",
+  "distilbert",
   "olmo2",
   "granite",
   "smollm3",
@@ -51,11 +55,71 @@ export async function fetchConfig(repo: string): Promise<Config> {
   return (await response.json()) as Config;
 }
 
+const ENCODERS = new Set(["bert", "roberta", "xlm-roberta", "distilbert", "electra"]);
+
+/**
+ * BERT and its family: bidirectional encoders. Learned positions and token
+ * types, normalisation after each part, GELU feed-forward with biases, and a
+ * pooler on the first token. Counts match the base models in transformers
+ * (BertModel, RobertaModel, DistilBertModel).
+ */
+function encoderFromConfig(config: Config, type: string, repo: string, seqLen: number): Model {
+  const distil = type === "distilbert";
+  const d = n(config, "hidden_size", "dim")!;
+  const layers = n(config, "num_hidden_layers", "n_layers")!;
+  const heads = n(config, "num_attention_heads", "n_heads")!;
+  const ff = n(config, "intermediate_size", "hidden_dim") ?? 4 * d;
+  const vocab = n(config, "vocab_size")!;
+  const positions = n(config, "max_position_embeddings") ?? 512;
+  const types = distil ? 0 : (n(config, "type_vocab_size") ?? 0);
+  const b = new Builder(repo || type, "language", repo ? `huggingface:${repo}` : "huggingface");
+  let x = b.input(String(Math.min(seqLen, positions)), "Tokens");
+  x = b.node("embedding", x, { vocab, dim: d }, "Token embedding");
+  x = b.node("posembed", x, { max: positions }, "Position embedding");
+  if (types) x = b.node("posembed", x, { max: types, types: true }, "Token type embedding");
+  x = b.node("layernorm", x, {}, "Embedding norm");
+  const input = x;
+  x = b.group(
+    "Encoder layer",
+    "encoder",
+    () => {
+      let h = b.node("attention", input, { heads, causal: false, qkv_bias: true, o_bias: true, rope: false }, "Self-attention (bidirectional)");
+      h = b.node("add", [h, input], {}, "Residual");
+      const mid = b.node("layernorm", h, {}, "Norm");
+      let f = b.node("mlp", mid, { ff, act: "gelu", bias: true }, "Feed-forward");
+      f = b.node("add", [f, mid], {}, "Residual");
+      return b.node("layernorm", f, {}, "Norm");
+    },
+    layers,
+  );
+  if (!distil) {
+    x = b.node("take_first", x, {}, "First token");
+    x = b.node("linear", x, { out: d }, "Pooler");
+    b.node("tanh", x);
+  }
+  return b.build(
+    {
+      family: type,
+      layers,
+      "hidden size": d,
+      attention: `Bidirectional, ${heads} heads`,
+      "feed-forward": `GELU, ${ff} wide`,
+      vocab,
+      context: positions,
+      positions: "learned",
+      norm: "LayerNorm, after each part",
+      pooler: distil ? "none" : "first token, dense + tanh",
+    },
+    Math.min(seqLen, positions),
+  );
+}
+
 export function fromHuggingFace(raw: Config, repo = "", seqLen = 2048): Model {
   // Multimodal configs keep the language model under text_config.
   const config: Config = typeof raw.text_config === "object" && raw.text_config ? { ...(raw.text_config as Config), model_type: (raw.text_config as Config).model_type ?? raw.model_type } : raw;
   const type = String(config.model_type ?? "");
   if (!type) throw new ConfigError("This config has no model_type, so its family is unknown.");
+  if (ENCODERS.has(type)) return encoderFromConfig(config, type, repo, seqLen);
 
   const gpt2 = type === "gpt2";
   const d = n(config, "hidden_size", "n_embd", "d_model");

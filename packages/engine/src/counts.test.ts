@@ -13,6 +13,10 @@ const exact: [string, number][] = [
   ["efficientnet-b0", 5_288_548],
   ["gpt2", 124_439_808],
   ["smollm2-135m", 134_515_008],
+  ["bert-base", 109_482_240],
+  ["roberta-base", 124_645_632],
+  ["distilbert-base", 66_362_880],
+  ["vit-b16", 86_567_656],
 ];
 
 const close: [string, number, number?][] = [
@@ -27,6 +31,13 @@ const close: [string, number, number?][] = [
   ["gemma-3-1b", 1.0e9],
   ["phi-3-mini", 3.82e9],
 ];
+
+// The paper reports about 65M for the base Transformer; layouts differ in small ways (biases), so allow 5%.
+test("Transformer base is about 65M", () => {
+  const analysis = analyze(catalogModel("transformer-base")!);
+  expect(analysis.errors).toEqual([]);
+  expect(Math.abs(analysis.params - 65e6) / 65e6).toBeLessThan(0.05);
+});
 
 describe("parameter counts match the published numbers", () => {
   for (const [id, expected] of exact) {

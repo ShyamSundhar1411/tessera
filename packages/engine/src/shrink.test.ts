@@ -5,10 +5,10 @@ import { diff } from "./diff";
 import { shrinkLanguageModel } from "./shrink";
 
 describe("shrinking language models keeps their wiring", () => {
-  for (const entry of CATALOG.filter((item) => item.shelf === "Language models")) {
+  for (const entry of CATALOG.filter((item) => item.shelf === "Language models" || item.shelf === "Encoders and seq2seq" || item.id === "vit-b16")) {
     test(entry.name, () => {
       const big = entry.build();
-      const small = shrinkLanguageModel(big, { vocab: 50257 });
+      const small = shrinkLanguageModel(big, big.kind === "language" ? { vocab: 50257 } : {});
       const analysis = analyze(small);
       expect(analysis.errors).toEqual([]);
       expect(analysis.params).toBeLessThan(60e6);

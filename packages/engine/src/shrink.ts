@@ -24,9 +24,12 @@ const round8 = (n: number) => Math.max(8, Math.round(n / 8) * 8);
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
 
 export function shrinkLanguageModel(model: Model, options: ShrinkOptions = {}): Model {
-  if (model.kind !== "language") throw new Error("Only language models are shrunk; image models already train at small sizes.");
+  // Language models, and image models built from transformer layers (ViT), shrink; CNNs already train at small sizes.
+  const transformerImage = model.kind === "vision" && model.nodes.some((node) => node.op === "to_sequence");
+  if (model.kind !== "language" && !transformerImage) throw new Error("Only transformer models are shrunk; CNNs already train at small sizes.");
   const embedding = model.nodes.find((node) => node.op === "embedding");
-  const originalDim = Number(embedding?.args.dim ?? 512);
+  const patches = model.nodes.find((node) => node.op === "conv2d" && model.nodes.some((other) => other.op === "to_sequence" && other.inputs.includes(node.id)));
+  const originalDim = Number(embedding?.args.dim ?? patches?.args.out ?? 512);
   const dim = options.dim ?? 256;
   const ratio = dim / originalDim;
   const targetHeads = options.heads ?? 4;
@@ -37,18 +40,27 @@ export function shrinkLanguageModel(model: Model, options: ShrinkOptions = {}): 
     const a: Record<string, ArgValue> = { ...node.args };
     switch (node.op) {
       case "input":
-        a.shape = String(seqLen);
+        if (!transformerImage) a.shape = String(seqLen);
+        break;
+      case "conv2d":
+        // A vision transformer's patch embedding sets the width of everything after it.
+        if (node.id === patches?.id) a.out = dim;
+        break;
+      case "linear":
+        if (Number(a.out) === originalDim) a.out = dim;
         break;
       case "embedding":
         a.dim = dim;
         if (options.vocab) a.vocab = options.vocab;
         break;
       case "posembed":
-        a.max = Math.max(seqLen, Math.min(Number(a.max ?? seqLen), seqLen * 4));
+        // Token-type tables keep their few rows; image position tables keep one row per patch.
+        if (!(a.types === true || a.types === "true") && !transformerImage) a.max = Math.max(seqLen, Math.min(Number(a.max ?? seqLen), seqLen * 4));
         break;
       case "lmhead":
         if (options.vocab) a.vocab = options.vocab;
         break;
+      case "cross_attention":
       case "attention": {
         const heads = Number(a.heads);
         const kv = Number(a.kv ?? heads);
@@ -105,7 +117,7 @@ export function shrinkLanguageModel(model: Model, options: ShrinkOptions = {}): 
     name: `${model.name} (small)`,
     nodes,
     groups,
-    seqLen,
+    seqLen: transformerImage ? model.seqLen : seqLen,
     meta: { ...model.meta, shrunk: `hidden ${dim}, ${budget} layers, from hidden ${originalDim}` },
   };
 }
