@@ -9,8 +9,11 @@ import { topoSort } from "./edit";
 // its text keeps the other in step.
 
 export type SlotIndex = 0 | 1;
-export type View = "2d" | "3d" | "trace";
-export type PanelName = "inspect" | "compare" | "maths" | "text" | "code" | "train" | "run";
+export type View = "2d" | "3d";
+/** The lab's main areas, picked from the left rail. */
+export type Mode = "design" | "trace" | "maths" | "train" | "run" | "export";
+/** Tabs beside the canvas in design mode. */
+export type PanelName = "inspect" | "compare" | "text";
 
 export interface Slot {
   model: Model;
@@ -28,6 +31,7 @@ export interface Slot {
 interface LabState {
   slots: [Slot | null, Slot | null];
   active: SlotIndex;
+  mode: Mode;
   view: View;
   panel: PanelName;
   editing: boolean;
@@ -42,6 +46,7 @@ interface LabState {
   toggleExpanded(slot: SlotIndex, groupId: string): void;
   setExpanded(slot: SlotIndex, groups: string[]): void;
   setActive(slot: SlotIndex): void;
+  setMode(mode: Mode): void;
   setView(view: View): void;
   setPanel(panel: PanelName): void;
   setEditing(editing: boolean): void;
@@ -74,6 +79,7 @@ const starter = CATALOG.find((entry) => entry.id === "cifar-cnn")!;
 export const useLab = create<LabState>((set, get) => ({
   ...withDiff([makeSlot(starter.build(), starter.name), null]),
   active: 0,
+  mode: "design",
   view: "2d",
   panel: "inspect",
   editing: false,
@@ -146,6 +152,7 @@ export const useLab = create<LabState>((set, get) => ({
   },
 
   setActive: (active) => set({ active }),
+  setMode: (mode) => set({ mode }),
   setView: (view) => set({ view }),
   setPanel: (panel) => set({ panel }),
   setEditing: (editing) => set({ editing }),
