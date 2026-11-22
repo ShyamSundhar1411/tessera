@@ -4,7 +4,7 @@ Rewire a neural network and see what changes. Load an architecture, from a small
 
 ## What it does
 
-- **Load** from the catalog (Llama 3.1, Mistral, Mixtral, Qwen 2.5 and 3, DeepSeek-V3, Gemma 2 and 3, Phi-3, SmolLM2, GPT-2, VGG16, ResNet-18 and 50, MobileNetV2, EfficientNet-B0 and small models), any open model's `config.json` from Hugging Face (fetched or pasted), an `.onnx` file, or a blank start.
+- **Load** from the catalog: decoder LLMs (Llama 3.1, Mistral, Mixtral, Qwen 2.5 and 3, DeepSeek-V3, Gemma 2 and 3, Phi-3, SmolLM2, GPT-2), the original encoder-decoder Transformer from *Attention Is All You Need*, encoders (BERT, RoBERTa, DistilBERT), image models (ViT-B/16, VGG16, ResNet-18 and 50, MobileNetV2, EfficientNet-B0) and small models. Or load any open model's `config.json` from Hugging Face (decoders and BERT-style encoders, fetched or pasted), an `.onnx` file, or start blank.
 - **See** it as a 2D graph (blocks open and close, skip connections highlighted) or in 3D, where each stage is the tensor a layer hands on: feature maps with kernel cones, neuron columns, token vectors with attention arcs and experts.
 - **Compare** A and B: parameters, active parameters, compute, 16-bit weight memory, KV cache per token, the settings that differ, and changed blocks marked on both drawings.
 - **Rewire**: drag layers in, connect and disconnect, change settings and block repeats, undo. The architecture's text form stays in step and can be edited directly.
