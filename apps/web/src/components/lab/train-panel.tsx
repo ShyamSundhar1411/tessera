@@ -1,109 +1,115 @@
 "use client";
 
 import { Play, Square } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
-import type { Model } from "tessera-engine";
-import type { DatasetName, Evaluation, MetricComparison, TrainEvent, TrainResult } from "tessera-lab";
-import { updateNode } from "@/lib/edit";
+import { useEffect, useRef, useState } from "react";
+import { formatCount, type Model } from "tessera-engine";
+import type { AnyTrainEvent, AnyTrainResult, DatasetName, Evaluation, MetricComparison, TaskSpec } from "tessera-lab";
 import { useLab } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { BandChart, Confusion } from "./chart";
 
 const COLOURS = ["#5fb4ff", "#f0569f"];
-const DATASET_INFO: Record<DatasetName, { label: string; shape: [number, number, number] }> = {
-  mnist: { label: "MNIST digits", shape: [1, 28, 28] },
-  "fashion-mnist": { label: "Fashion-MNIST", shape: [1, 28, 28] },
-  cifar10: { label: "CIFAR-10 photos", shape: [3, 32, 32] },
-};
-const METRIC_LABEL: Record<string, string> = { loss: "Test loss", accuracy: "Accuracy", errorRate: "Error rate", macroF1: "Macro F1" };
+const IMAGE_DATASETS: { id: DatasetName; label: string }[] = [
+  { id: "mnist", label: "MNIST digits" },
+  { id: "fashion-mnist", label: "Fashion-MNIST" },
+  { id: "cifar10", label: "CIFAR-10 photos" },
+];
+const METRIC_LABEL: Record<string, string> = { loss: "Test loss", accuracy: "Accuracy", errorRate: "Error rate", macroF1: "Macro F1", perplexity: "Perplexity" };
 
-/** Points a model at a dataset: its input shape, and a final layer with one output per class. */
-function adapt(model: Model, dataset: DatasetName): Model {
-  const [c, h, w] = DATASET_INFO[dataset].shape;
-  let next = model;
-  const input = model.nodes.find((node) => node.op === "input");
-  if (input) next = updateNode(next, input.id, { args: { shape: `${c}x${h}x${w}` } });
-  const last = [...next.nodes].reverse().find((node) => node.op === "linear");
-  if (last) next = updateNode(next, last.id, { args: { out: 10 } });
-  return next;
+interface Plan {
+  task: TaskSpec;
+  prepared: { description: string; params: number; originalParams: number }[];
 }
 
 interface Live {
-  /** Per model, per run: test metrics after each epoch. */
-  epochs: { accuracy: number; loss: number }[][][];
+  epochs: { accuracy: number; loss: number; perplexity?: number }[][][];
   status: string;
 }
 
 export default function TrainPanel() {
   const slots = useLab((state) => state.slots);
-  const edit = useLab((state) => state.edit);
-  const setPanel = useLab((state) => state.setPanel);
-  const [dataset, setDataset] = useState<DatasetName>("mnist");
-  const [train, setTrain] = useState(4000);
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
+  const [dataset, setDataset] = useState<DatasetName | null>(null);
+  const [examples, setExamples] = useState(2000);
   const [epochs, setEpochs] = useState(4);
   const [seeds, setSeeds] = useState(2);
   const [learningRate, setLearningRate] = useState(0.002);
   const [running, setRunning] = useState(false);
   const [live, setLive] = useState<Live | null>(null);
-  const [result, setResult] = useState<{ result: TrainResult; comparison: MetricComparison[] | null; classes: string[] } | null>(null);
-  const [problems, setProblems] = useState<(string | null)[]>([]);
+  const [result, setResult] = useState<{ result: AnyTrainResult; comparison: MetricComparison[] | null; classes: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const models: Model[] = slots.filter(Boolean).map((slot) => slot!.model);
 
-  const models = slots.filter(Boolean).map((slot) => slot!.model);
-  const language = models.some((model) => model.kind === "language");
-
-  // Check each model against the dataset whenever either changes.
-  useMemo(() => {
-    void import("tessera-lab").then(({ checkCompatibility, trainingProblem, DATASETS }) => {
-      setProblems(models.map((model) => trainingProblem(model) ?? checkCompatibility(model, DATASETS[dataset])));
+  // Work out what these models can learn, and how they would be shrunk to train here.
+  useEffect(() => {
+    let live = true;
+    void import("tessera-lab").then(({ planCompare }) => {
+      if (!live) return;
+      const outcome = planCompare(models, dataset ? { imageDataset: dataset } : undefined);
+      if (outcome.ok) {
+        setPlan({ task: outcome.task, prepared: outcome.prepared.map((item) => ({ description: item.description, params: item.params, originalParams: item.originalParams })) });
+        setReason(null);
+      } else {
+        setPlan(null);
+        setReason(outcome.reason);
+      }
     });
+    return () => {
+      live = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slots, dataset]);
 
-  if (language)
-    return (
-      <div className="space-y-3 p-4 text-[13px] leading-relaxed">
-        <p className="font-medium">Language models train in Colab</p>
-        <p className="text-muted">Training even a small language model needs a GPU. The Colab export shrinks it to about 30M parameters with the same wiring and trains it on TinyStories, over several seeds.</p>
-        <button type="button" onClick={() => setPanel("code")} className="rounded-lg bg-ink px-3 py-1.5 text-[13px] font-medium text-bg hover:opacity-85">
-          Open the Colab export
-        </button>
-      </div>
-    );
+  const imageTask = plan?.task.kind === "image-classification";
 
   const start = async () => {
+    if (!plan) return;
     setError(null);
     setResult(null);
     setRunning(true);
     const controller = new AbortController();
     abort.current = controller;
-    const state: Live = { epochs: models.map(() => []), status: "Loading the dataset…" };
+    const state: Live = { epochs: models.map(() => []), status: "Preparing the data…" };
     setLive({ ...state });
     try {
       const lab = await import("tessera-lab");
-      const data = await lab.loadDataset(dataset, { train, test: Math.min(2000, Math.round(train / 4)) }, (progress) => {
-        state.status = progress.stage === "download" ? `Downloading ${lab.DATASETS[dataset].label}… ${progress.total ? Math.round((progress.loaded / progress.total) * 100) : 0}%` : `Preparing images… ${progress.loaded}${progress.total ? ` of ${progress.total}` : ""}`;
-        setLive({ ...state });
-      });
-      const seedList = Array.from({ length: seeds }, (_, i) => i);
-      const output = await lab.trainCompare(
+      let imageDataset;
+      let classes: string[] = [];
+      if (imageTask) {
+        const name = plan.task.imageDataset ?? "mnist";
+        imageDataset = await lab.loadDataset(name, { train: examples, test: Math.min(2000, Math.round(examples / 4)) }, (progress) => {
+          state.status = progress.stage === "download" ? `Downloading ${lab.DATASETS[name].label}… ${progress.total ? Math.round((progress.loaded / progress.total) * 100) : 0}%` : `Preparing images… ${progress.loaded}${progress.total ? ` of ${progress.total}` : ""}`;
+          setLive({ ...state });
+        });
+        classes = lab.DATASETS[name].classes;
+      } else if (plan.task.kind === "sequence-classification") classes = Array.from({ length: plan.task.classes }, (_, i) => `class ${i}`);
+      const output = await lab.trainCompareAny(
         models,
-        data,
-        { epochs, batchSize: 64, learningRate, seed: 0, seeds: seedList },
-        (event: TrainEvent) => {
-          const name = models[event.modelIndex].name;
-          state.status = `${name} · seed ${event.seed} · epoch ${event.epoch}/${epochs} · batch ${event.batch}/${event.batches} · loss ${event.loss.toFixed(3)}`;
+        {
+          epochs,
+          batchSize: imageTask ? 64 : 32,
+          learningRate,
+          seed: 0,
+          seeds: Array.from({ length: seeds }, (_, i) => i),
+          imageDataset,
+          trainExamples: examples,
+          testExamples: Math.max(128, Math.round(examples / 8)),
+          ...(dataset ? { prepare: { imageDataset: dataset } } : {}),
+        },
+        (event: AnyTrainEvent) => {
+          state.status = `${models[event.modelIndex].name} · seed ${event.seed} · epoch ${event.epoch}/${epochs} · batch ${event.batch}/${event.batches} · loss ${event.loss.toFixed(3)}`;
           if (event.type === "epoch" && event.evaluation) {
             const runs = (state.epochs[event.modelIndex] ??= []);
-            (runs[event.run] ??= []).push({ accuracy: event.evaluation.accuracy, loss: event.evaluation.loss });
+            (runs[event.run] ??= []).push({ accuracy: event.evaluation.accuracy, loss: event.evaluation.loss, perplexity: event.evaluation.perplexity });
           }
           setLive({ ...state, epochs: state.epochs.map((runs) => runs.map((run) => [...run])) });
         },
         controller.signal,
       );
-      lab.disposeDataset(data);
-      setResult({ result: output, comparison: output.models.length === 2 ? lab.compareRuns(output.models[0], output.models[1]) : null, classes: lab.DATASETS[dataset].classes });
+      if (imageDataset) lab.disposeDataset(imageDataset);
+      setResult({ result: output, comparison: output.models.length === 2 ? lab.compareRuns(output.models[0], output.models[1]) : null, classes });
       state.status = output.aborted ? "Stopped." : `Done, on ${output.backend}.`;
       setLive({ ...state });
     } catch (caught) {
@@ -113,13 +119,14 @@ export default function TrainPanel() {
     }
   };
 
-  const bands = (key: "accuracy" | "loss") =>
+  const bands = (key: "accuracy" | "loss" | "perplexity") =>
     (live?.epochs ?? []).map((runs, index) => {
       const length = Math.max(0, ...runs.map((run) => run.length));
       const mean: number[] = [];
       const std: number[] = [];
       for (let e = 0; e < length; e++) {
-        const values = runs.map((run) => run[e]?.[key]).filter((v): v is number => v !== undefined);
+        const values = runs.map((run) => run[e]?.[key]).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+        if (!values.length) continue;
         const m = values.reduce((a, b) => a + b, 0) / values.length;
         mean.push(m);
         std.push(values.length > 1 ? Math.sqrt(values.reduce((a, b) => a + (b - m) ** 2, 0) / (values.length - 1)) : 0);
@@ -130,21 +137,51 @@ export default function TrainPanel() {
   const field = "mt-1 w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-[12px] text-ink";
   return (
     <div className="space-y-4 p-4 text-[13px]">
-      <div className="grid grid-cols-2 gap-2.5">
-        <label className="col-span-2 text-[12px] text-muted">
-          Dataset
-          <select value={dataset} onChange={(event) => setDataset(event.target.value as DatasetName)} className={field}>
-            {Object.entries(DATASET_INFO).map(([id, info]) => (
-              <option key={id} value={id}>
-                {info.label} ({info.shape.join("×")})
-              </option>
+      {plan ? (
+        <div className="rounded-lg border border-line bg-surface-2 p-3">
+          <p className="text-[12px] text-muted">What they will learn</p>
+          <p className="mt-0.5 font-medium">{plan.task.label}</p>
+          <p className="mt-0.5 text-[11.5px] text-muted">Scored by {plan.task.accuracyLabel}. Data: {plan.task.source}.</p>
+          <ul className="mt-2 space-y-1.5">
+            {plan.prepared.map((item, index) => (
+              <li key={index} className="text-[12px] leading-relaxed">
+                <span className="font-semibold" style={{ color: COLOURS[index] }}>
+                  {index ? "B" : "A"}
+                </span>{" "}
+                {item.params !== item.originalParams ? (
+                  <>
+                    trains at <span className="font-mono">{formatCount(item.params)}</span> parameters, shrunk from <span className="font-mono">{formatCount(item.originalParams)}</span> with the same wiring.
+                  </>
+                ) : (
+                  <>
+                    trains as is, <span className="font-mono">{formatCount(item.params)}</span> parameters.
+                  </>
+                )}
+              </li>
             ))}
-          </select>
-        </label>
+          </ul>
+        </div>
+      ) : (
+        reason && <p className="rounded-lg border border-warn/50 bg-warn/10 px-3 py-2 text-[12.5px]">{reason}</p>
+      )}
+
+      <div className="grid grid-cols-2 gap-2.5">
+        {imageTask && (
+          <label className="col-span-2 text-[12px] text-muted">
+            Dataset
+            <select value={dataset ?? plan?.task.imageDataset ?? "mnist"} onChange={(event) => setDataset(event.target.value as DatasetName)} className={field}>
+              {IMAGE_DATASETS.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="text-[12px] text-muted">
-          Training images
-          <select value={train} onChange={(event) => setTrain(Number(event.target.value))} className={field}>
-            {[1000, 2000, 4000, 8000, 16000].map((n) => (
+          {imageTask ? "Training images" : "Training examples"}
+          <select value={examples} onChange={(event) => setExamples(Number(event.target.value))} className={field}>
+            {[500, 1000, 2000, 4000, 8000].map((n) => (
               <option key={n} value={n}>
                 {n.toLocaleString()}
               </option>
@@ -165,24 +202,6 @@ export default function TrainPanel() {
         </label>
       </div>
 
-      {models.map((model, index) =>
-        problems[index] ? (
-          <div key={index} className="rounded-lg border border-warn/50 bg-warn/10 px-3 py-2 text-[12.5px]">
-            <p>
-              <span className="font-medium" style={{ color: COLOURS[index] }}>
-                {index ? "B" : "A"}
-              </span>{" "}
-              {problems[index]}
-            </p>
-            {/(expects|outputs|classes)/i.test(problems[index]!) && (
-              <button type="button" onClick={() => edit(index as 0 | 1, (m) => adapt(m, dataset))} className="mt-1.5 rounded-md border border-line px-2 py-0.5 text-[12px] hover:border-muted">
-                Adapt it to {DATASET_INFO[dataset].label}
-              </button>
-            )}
-          </div>
-        ) : null,
-      )}
-
       <div className="flex items-center gap-2">
         {running ? (
           <button type="button" onClick={() => abort.current?.abort()} className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[13px] hover:border-muted">
@@ -190,7 +209,7 @@ export default function TrainPanel() {
             Stop
           </button>
         ) : (
-          <button type="button" disabled={problems.some(Boolean)} onClick={() => void start()} className="flex items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[13px] font-medium text-bg hover:opacity-85 disabled:opacity-40">
+          <button type="button" disabled={!plan} onClick={() => void start()} className="flex items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[13px] font-medium text-bg hover:opacity-85 disabled:opacity-40">
             <Play className="size-3.5" />
             Train {models.length > 1 ? "both" : ""}
           </button>
@@ -210,17 +229,17 @@ export default function TrainPanel() {
               </span>
             ))}
           </div>
-          <BandChart label="Test accuracy (band: ± one standard deviation across seeds)" series={bands("accuracy")} percent />
-          <BandChart label="Test loss" series={bands("loss")} />
+          <BandChart label={`${plan?.task.accuracyLabel ?? "Accuracy"} (band: ± one standard deviation across seeds)`} series={bands("accuracy")} percent />
+          {plan?.task.tokenLevel ? <BandChart label="Perplexity (lower is better)" series={bands("perplexity")} /> : <BandChart label="Test loss" series={bands("loss")} />}
         </div>
       )}
 
-      {result && <Results result={result.result} comparison={result.comparison} classes={result.classes} />}
+      {result && <Results result={result.result} comparison={result.comparison} classes={result.classes} tokenLevel={!!plan?.task.tokenLevel} />}
     </div>
   );
 }
 
-function Results({ result, comparison, classes }: { result: TrainResult; comparison: MetricComparison[] | null; classes: string[] }) {
+function Results({ result, comparison, classes, tokenLevel }: { result: AnyTrainResult; comparison: MetricComparison[] | null; classes: string[]; tokenLevel: boolean }) {
   const [shown, setShown] = useState(0);
   const model = result.models[shown];
   const finals = model?.runs.map((run) => run.final).filter((f): f is Evaluation => !!f) ?? [];
@@ -229,7 +248,8 @@ function Results({ result, comparison, classes }: { result: TrainResult; compari
   const topNorms = Object.entries(norms).sort((a, b) => b[1] - a[1]);
   const maxNorm = Math.max(1e-9, ...topNorms.map(([, v]) => v));
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
-  const fmt = (metric: string, v: number) => (metric === "loss" ? v.toFixed(3) : metric === "macroF1" ? v.toFixed(3) : pct(v));
+  const fmt = (metric: string, v: number) => (metric === "loss" || metric === "macroF1" ? v.toFixed(3) : metric === "perplexity" ? v.toFixed(2) : pct(v));
+  const metrics = (tokenLevel ? ["loss", "perplexity", "accuracy", "errorRate"] : ["loss", "accuracy", "errorRate", "macroF1"]) as string[];
 
   return (
     <div className="space-y-4">
@@ -237,7 +257,7 @@ function Results({ result, comparison, classes }: { result: TrainResult; compari
         <thead className="text-[11.5px] text-muted">
           <tr>
             <th className="pb-1 text-left font-normal">Final, mean ± std</th>
-            {result.models.map((m, i) => (
+            {result.models.map((_, i) => (
               <th key={i} className="pb-1 text-right font-normal" style={{ color: COLOURS[i] }}>
                 {i ? "B" : "A"}
               </th>
@@ -246,20 +266,23 @@ function Results({ result, comparison, classes }: { result: TrainResult; compari
           </tr>
         </thead>
         <tbody>
-          {(["loss", "accuracy", "errorRate", "macroF1"] as const).map((metric) => {
+          {metrics.map((metric) => {
             const row = comparison?.find((c) => c.metric === metric);
             return (
               <tr key={metric} className="border-t border-line">
                 <td className="py-1.5 text-muted">{METRIC_LABEL[metric]}</td>
-                {result.models.map((m, i) => (
-                  <td key={i} className="py-1.5 text-right font-mono">
-                    {fmt(metric, m.summary[metric].mean)}
-                    {m.summary[metric].n > 1 && <span className="text-muted"> ± {fmt(metric, m.summary[metric].std)}</span>}
-                  </td>
-                ))}
+                {result.models.map((m, i) => {
+                  const stats = (m.summary as Record<string, { mean: number; std: number; n: number } | undefined>)[metric];
+                  return (
+                    <td key={i} className="py-1.5 text-right font-mono">
+                      {stats ? fmt(metric, stats.mean) : "-"}
+                      {stats && stats.n > 1 && <span className="text-muted"> ± {fmt(metric, stats.std)}</span>}
+                    </td>
+                  );
+                })}
                 {comparison && (
                   <td className={cn("py-1.5 text-right text-[11.5px]", row?.beyondNoise ? (row.better === "b" ? "text-added" : "text-removed") : "text-muted")}>
-                    {row?.beyondNoise === null ? "1 seed" : row?.beyondNoise ? `${row.better.toUpperCase()} better` : "within noise"}
+                    {!row ? "" : row.beyondNoise === null ? "1 seed" : row.beyondNoise ? `${row.better.toUpperCase()} better` : "within noise"}
                   </td>
                 )}
               </tr>
@@ -278,7 +301,8 @@ function Results({ result, comparison, classes }: { result: TrainResult; compari
           ))}
         </div>
       )}
-      {last && (
+      {model?.description && <p className="text-[11.5px] leading-relaxed text-muted">{model.description}</p>}
+      {last && !tokenLevel && classes.length > 0 && classes.length <= 20 && (
         <>
           <div>
             <p className="mb-1.5 text-[12px] text-muted">Confusion matrix, last seed{last.top5Accuracy !== undefined ? ` · top-5 accuracy ${pct(last.top5Accuracy)}` : ""}</p>
@@ -306,6 +330,7 @@ function Results({ result, comparison, classes }: { result: TrainResult; compari
           </table>
         </>
       )}
+      {last?.sequenceAccuracy !== undefined && <p className="text-[12px]">Whole sequences exactly right: <span className="font-mono">{pct(last.sequenceAccuracy)}</span></p>}
       {topNorms.length > 0 && (
         <div>
           <p className="mb-1.5 text-[12px] text-muted">Which layers were learning: gradient size per layer, last epoch</p>
