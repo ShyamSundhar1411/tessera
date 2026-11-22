@@ -16,6 +16,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "blank", label: "Start empty" },
 ];
 
+/** The papers everything else builds on, shown first. */
+const CLASSICS = ["transformer-base", "resnet50", "alexnet", "gpt2", "bert-base", "vit-b16", "unet", "lenet5"];
+
 const SUGGESTED = ["Qwen/Qwen2.5-0.5B", "HuggingFaceTB/SmolLM2-360M", "microsoft/Phi-3.5-mini-instruct", "mistralai/Mistral-Nemo-Base-2407", "Qwen/Qwen3-4B", "allenai/OLMo-2-1124-7B"];
 
 const BLANK = {
@@ -81,6 +84,27 @@ export default function SourceDialog({ slot, onClose }: { slot: SlotIndex; onClo
           ))}
         </div>
         <div className="scroll-quiet min-h-0 flex-1 overflow-y-auto p-5">
+          {tab === "catalog" && (
+            <section className="mb-6">
+              <h3 className="mb-2 flex items-baseline justify-between text-[12.5px] text-muted">
+                The classics
+                <button type="button" onClick={() => setTab("papers")} className="text-accent hover:underline">
+                  All {PAPER_TIMELINE.length} papers on a timeline
+                </button>
+              </h3>
+              <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {CLASSICS.map((id) => CATALOG.find((entry) => entry.id === id)!).map((entry) => (
+                  <li key={entry.id}>
+                    <button type="button" onClick={() => finish(entry.build(), entry.name)} className="h-full w-full rounded-xl border border-line bg-gradient-to-b from-surface-2 to-surface p-3 text-left transition hover:border-accent">
+                      <span className="font-mono text-[11px] text-accent">{entry.paper?.year}</span>
+                      <span className="mt-0.5 block text-[13.5px] font-semibold">{entry.name}</span>
+                      <span className="mt-1 block text-[11.5px] leading-snug text-muted">{entry.paper?.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           {tab === "catalog" &&
             shelves.map((shelf) => (
               <section key={shelf} className="mb-5 last:mb-0">

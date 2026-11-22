@@ -78,6 +78,7 @@ export const CATALOG: CatalogEntry[] = [
 ];
 
 const PAPERS: Record<string, Paper> = {
+  "lenet5": { title: "Gradient-Based Learning Applied to Document Recognition", authors: "LeCun, Bottou, Bengio, Haffner", year: 1998, url: "http://yann.lecun.com/exdb/publis/pdf/lecun-98.pdf", idea: "Learn the filters instead of designing them: convolutions with shared weights, pooling, then dense layers, trained by backpropagation." },
   "alexnet": { title: "ImageNet Classification with Deep Convolutional Neural Networks", authors: "Krizhevsky, Sutskever, Hinton", year: 2012, url: "https://papers.nips.cc/paper/2012/hash/c399862d3b9d6b76c8436e924a68c45b-Abstract.html", idea: "Deep stacks of convolutions with ReLU and dropout, trained end to end on GPUs." },
   "vgg16": { title: "Very Deep Convolutional Networks for Large-Scale Image Recognition", authors: "Simonyan, Zisserman", year: 2014, url: "https://arxiv.org/abs/1409.1556", idea: "Only 3\u00d73 convolutions, stacked deep: two 3\u00d73 layers see as much as one 5\u00d75 with fewer weights." },
   "googlenet": { title: "Going Deeper with Convolutions", authors: "Szegedy et al.", year: 2014, url: "https://arxiv.org/abs/1409.4842", idea: "Run several filter sizes side by side and concatenate, with 1\u00d71 convolutions keeping it cheap." },
