@@ -94,7 +94,7 @@ export default function Lab() {
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="flex h-12 flex-none items-center gap-2 border-b border-line px-3">
+      <header className="scroll-quiet flex h-12 flex-none items-center gap-2 overflow-x-auto border-b border-line px-3 whitespace-nowrap">
         <Link href="/" className="flex items-center gap-2 pr-2">
           <Mark className="size-6" />
           <span className="text-[15px] font-semibold tracking-tight">Tessera</span>
@@ -130,11 +130,15 @@ export default function Lab() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        {editing && view === "2d" && <Palette />}
-        <main className={cn("grid min-h-0 min-w-0 flex-1", shown.length === 2 && "md:grid-cols-2")}>
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {editing && view === "2d" && (
+          <div className="hidden lg:block">
+            <Palette />
+          </div>
+        )}
+        <main className={cn("grid min-h-0 min-w-0 flex-1", shown.length === 2 && "grid-rows-2 md:grid-cols-2 md:grid-rows-1")}>
           {shown.map((index) => (
-            <section key={index} className={cn("flex min-h-0 flex-col", index === 1 && "border-l border-line")}>
+            <section key={index} className={cn("flex min-h-0 flex-col", index === 1 && "border-t border-line md:border-t-0 md:border-l")}>
               <SlotHeader slot={index} onLoad={() => setDialog(index)} />
               <div className="min-h-0 flex-1">
                 <Graph slot={index} />
@@ -149,7 +153,8 @@ export default function Lab() {
             </div>
           )}
         </main>
-        <aside className="flex w-[360px] flex-none flex-col border-l border-line bg-surface">
+        {/* On phones the panels sit under the canvas; on wide screens, beside it. */}
+        <aside className="flex h-[46dvh] w-full flex-none flex-col border-t border-line bg-surface lg:h-auto lg:w-[360px] lg:border-t-0 lg:border-l">
           <div className="flex flex-none gap-0.5 overflow-x-auto border-b border-line px-2 pt-2">
             {PANELS.map((item) => (
               <button key={item.id} type="button" onClick={() => setPanel(item.id)} className={cn("-mb-px border-b-2 border-transparent px-2 pb-2 text-[12.5px] whitespace-nowrap text-muted hover:text-ink", panel === item.id && "border-accent text-ink")}>

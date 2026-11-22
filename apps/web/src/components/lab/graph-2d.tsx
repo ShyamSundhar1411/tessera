@@ -233,7 +233,7 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
         <FitOnChange container={container} token={`${data.model.name}|${data.expanded.join(",")}|${display ? "1" : "0"}`} />
         <Background gap={22} size={1} color="var(--line)" />
         <Controls showInteractive={false} position="bottom-left" />
-        {!comparing && <MiniMap pannable zoomable position="bottom-right" nodeColor={(node) => CATEGORY_COLOURS[(node.data as unknown as Data).category] ?? "#888"} maskColor="color-mix(in srgb, var(--bg) 70%, transparent)" />}
+        {!comparing && <MiniMap className="max-md:!hidden" pannable zoomable position="bottom-right" nodeColor={(node) => CATEGORY_COLOURS[(node.data as unknown as Data).category] ?? "#888"} maskColor="color-mix(in srgb, var(--bg) 70%, transparent)" />}
       </ReactFlow>
     </div>
   );
