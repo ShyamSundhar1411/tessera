@@ -1,12 +1,14 @@
 "use client";
 
-import { Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
+import { Box, Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { OPS, type Model, type Node, type Shape } from "tessera-engine";
 import type { Gpt2Tokenizer, GraphModel, PlainFeed, PreparedModel, TaskSpec, TracedLayer } from "tessera-lab";
 import { CATEGORY_COLOURS } from "@/lib/display";
 import { explain } from "@/lib/equations";
 import { useLab, type SlotIndex } from "@/lib/store";
+import { useTraceShared } from "@/lib/trace-shared";
 import { trainedFor, useTrained } from "@/lib/trained";
 import { cn } from "@/lib/utils";
 import Tex from "./tex";
@@ -19,6 +21,8 @@ import { RealWeightsButton, WeightsBadge } from "./weights";
 // can run full size with OpenAI's published weights.
 
 type Lab = typeof import("tessera-lab");
+
+const Graph3D = dynamic(() => import("./graph-3d"), { ssr: false, loading: () => <div className="grid h-full place-items-center text-[13px] text-muted">Loading 3D…</div> });
 
 const SLOT_COLOURS = ["#5fb4ff", "#f0569f"];
 const DEFAULT_TEXT = "To be, or not to be, that is the question:";
@@ -718,10 +722,31 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
     };
   }, [value, inputs]);
 
-  const layers = trace.value?.layers ?? [];
+  const layers = useMemo(() => trace.value?.layers ?? [], [trace.value]);
   const now = layers.length ? Math.round(cursor * (layers.length - 1)) : 0;
 
   useEffect(() => onSteps(layers.length), [layers.length, onSteps]);
+
+  // Hand the values and the current layer to the 3D view beside this pane.
+  const setValues = useTraceShared((state) => state.setValues);
+  const setFocus = useTraceShared((state) => state.setFocus);
+  useEffect(() => {
+    if (!layers.length) return;
+    const values = new Map<string, TracedLayer>();
+    for (const layer of layers) if (layer.copy === 0) values.set(layer.nodeId, layer);
+    setValues(slot, values);
+  }, [layers, slot, setValues]);
+  useEffect(() => {
+    const layer = layers[now];
+    setFocus(slot, layer ? { nodeId: layer.nodeId, copy: layer.copy, layer, rows: layer.rows } : null);
+  }, [layers, now, slot, setFocus]);
+  useEffect(
+    () => () => {
+      setValues(slot, null);
+      setFocus(slot, null);
+    },
+    [slot, setValues, setFocus],
+  );
   useEffect(() => {
     if (!playing) return;
     list.current?.querySelector(`[data-step="${now}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -730,7 +755,7 @@ function Column({ slot, inputs, cursor, playing, onSteps, onSeek }: { slot: Slot
   if (!data) return null;
   const output = layers[layers.length - 1];
   return (
-    <section className={cn("flex min-h-0 flex-col", slot === 1 && "border-t border-line md:border-t-0 md:border-l")}>
+    <section className="flex min-h-0 flex-col">
       <div className="flex flex-none flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-surface px-4 py-2.5">
         <span className="grid size-5 place-items-center rounded text-[11px] font-semibold text-[#0b0d12]" style={{ background: SLOT_COLOURS[slot] }}>
           {slot ? "B" : "A"}
@@ -889,6 +914,7 @@ export default function TraceView() {
   const [cursor, setCursor] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [steps, setSteps] = useState<[number, number]>([0, 0]);
+  const [show3d, setShow3d] = useState(true);
   const shown = ([0, 1] as SlotIndex[]).filter((index) => slots[index]);
   const inputs = useMemo<Inputs>(() => ({ text, symbols, pad, padVersion }), [text, symbols, pad, padVersion]);
   const onSteps = useMemo(() => [0, 1].map((slot) => (n: number) => setSteps((current) => (current[slot] === n ? current : ((slot ? [current[0], n] : [n, current[1]]) as [number, number])))), []);
@@ -946,6 +972,10 @@ export default function TraceView() {
           </label>
         )}
         <div className="ml-auto flex items-center gap-1">
+          <button type="button" onClick={() => setShow3d(!show3d)} aria-pressed={show3d} className={cn("mr-2 hidden h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] md:flex", show3d ? "border-accent bg-accent/10 text-accent" : "border-line hover:border-muted")}>
+            <Box className="size-3.5" />
+            3D beside
+          </button>
           <button type="button" aria-label="Back to the start" onClick={() => { setPlaying(false); setCursor(0); }} className="grid size-8 place-items-center rounded-lg border border-line hover:border-muted">
             <RotateCcw className="size-3.5" />
           </button>
@@ -968,9 +998,19 @@ export default function TraceView() {
           </button>
         </div>
       </div>
-      <div className={cn("grid min-h-0 flex-1", shown.length === 2 && "grid-rows-2 md:grid-cols-2 md:grid-rows-1")}>
+      {/* One row per model: its 3D view, painted with the trace's values, beside its trace pane. */}
+      <div className={cn("grid min-h-0 flex-1", shown.length === 2 && "grid-rows-2")}>
         {shown.map((slot) => (
-          <Column key={slot} slot={slot} inputs={inputs} cursor={cursor} playing={playing} onSteps={onSteps[slot]} onSeek={(fraction) => { setPlaying(false); setCursor(fraction); }} />
+          <div key={slot} className={cn("flex min-h-0", slot === 1 && "border-t border-line")}>
+            {show3d && (
+              <div className="hidden min-w-0 flex-1 border-r border-line md:block">
+                <Graph3D slot={slot} compact trace />
+              </div>
+            )}
+            <div className={cn("flex min-h-0 min-w-0 flex-col", show3d ? "w-full md:w-[480px] md:flex-none xl:w-[560px]" : "flex-1")}>
+              <Column slot={slot} inputs={inputs} cursor={cursor} playing={playing} onSteps={onSteps[slot]} onSeek={(fraction) => { setPlaying(false); setCursor(fraction); }} />
+            </div>
+          </div>
         ))}
       </div>
     </div>

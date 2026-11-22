@@ -1,4 +1,4 @@
-import { OPS, type ArgValue, type Model, type Node } from "tessera-engine";
+import { analyze, OPS, type ArgValue, type Model, type Node } from "tessera-engine";
 
 // Edits made on the canvas or in the inspector. Each returns a new model and
 // keeps the nodes in an order where every node comes after its inputs, which
@@ -52,7 +52,13 @@ export function addNode(model: Model, op: string, after?: string, group?: string
   return { model: topoSort({ ...model, nodes: [...model.nodes, node] }), id };
 }
 
-/** Connects source's output to target. One-input operations swap their input; joins gain one. */
+/**
+ * Connects source's output to target. A join (add, concat) gains an input; a
+ * layer that reads nothing yet reads source. A layer that already reads
+ * something keeps it and gets a join in front: an add when the shapes match,
+ * as a residual, or a concat when only the channels differ, as a dense
+ * connection. So dragging an earlier layer onto a later one draws a skip.
+ */
 export function connect(model: Model, source: string, target: string): Model {
   if (source === target) return model;
   // Refuse a connection that would make a loop.
@@ -63,14 +69,42 @@ export function connect(model: Model, source: string, target: string): Model {
     return model.nodes.filter((node) => node.inputs.includes(from)).some((node) => reaches(node.id, to, seen));
   };
   if (reaches(target, source)) return model;
-  const nodes = model.nodes.map((node) => {
-    if (node.id !== target) return node;
-    const arity = OPS[node.op]?.arity;
-    if (arity === "none") return node;
-    if (arity === "many") return node.inputs.includes(source) ? node : { ...node, inputs: [...node.inputs, source] };
-    return { ...node, inputs: [source] };
-  });
+  const node = model.nodes.find((item) => item.id === target);
+  const arity = node && OPS[node.op]?.arity;
+  if (!node || arity === "none" || node.inputs.includes(source)) return model;
+  if (arity === "many" || node.inputs.length === 0) {
+    const nodes = model.nodes.map((item) => (item.id === target ? { ...item, inputs: [...item.inputs, source] } : item));
+    return topoSort({ ...model, nodes });
+  }
+  const info = analyze(model).info;
+  const a = info.get(node.inputs[0])?.shape ?? [];
+  const b = info.get(source)?.shape ?? [];
+  const same = a.join("x") === b.join("x");
+  // Channels first for images, features last for sequences: everything else must match to concatenate.
+  const concatenable = a.length === b.length && (a.length === 3 ? a.slice(1).join("x") === b.slice(1).join("x") : a.slice(0, -1).join("x") === b.slice(0, -1).join("x"));
+  const op = same || !concatenable ? "add" : "concat";
+  const id = freshId(model, op);
+  const join: Node = { id, op, args: {}, inputs: [node.inputs[0], source], label: op === "add" ? "Skip join" : "Dense join", ...(node.group ? { group: node.group } : {}) };
+  const nodes = [...model.nodes.map((item) => (item.id === target ? { ...item, inputs: [id, ...item.inputs.slice(1)] } : item)), join];
   return topoSort({ ...model, nodes });
+}
+
+/**
+ * The real node a canvas box stands for at one end of a connection: itself,
+ * or for a closed block, the node its output leaves from (as a source) or the
+ * first node that reads from outside it (as a target).
+ */
+export function connectionEnd(model: Model, id: string, end: "source" | "target"): string | undefined {
+  if (model.nodes.some((node) => node.id === id)) return id;
+  const within = (groupId: string | undefined): boolean => {
+    for (let g = groupId; g; g = model.groups.find((group) => group.id === g)?.parent) if (g === id) return true;
+    return false;
+  };
+  const members = model.nodes.filter((node) => within(node.group));
+  if (!members.length) return undefined;
+  if (end === "source") return members[members.length - 1].id;
+  const inside = new Set(members.map((node) => node.id));
+  return members.find((node) => node.inputs.some((input) => !inside.has(input)))?.id ?? members[0].id;
 }
 
 export function disconnect(model: Model, source: string, target: string): Model {

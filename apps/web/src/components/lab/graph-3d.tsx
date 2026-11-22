@@ -5,8 +5,11 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BoxGeometry, CanvasTexture, CatmullRomCurve3, Color, DoubleSide, NearestFilter, Vector3, type Group } from "three";
 import { formatCount, type Model, type Shape } from "tessera-engine";
+import type { TracedLayer } from "tessera-lab";
 import { buildDisplay, CATEGORY_COLOURS, formatShape, type Display, type DisplayNode } from "@/lib/display";
+import { connect, connectionEnd } from "@/lib/edit";
 import { useLab, type SlotIndex } from "@/lib/store";
+import { useTraceShared } from "@/lib/trace-shared";
 
 // The architecture as data moving through it. Each stage is the tensor a
 // layer hands on, drawn the way papers draw it: an image tensor as a stack of
@@ -78,16 +81,123 @@ function gridTexture(colour: string, cells: number) {
   return texture;
 }
 
-function Maps({ stage, lit }: { stage: Stage; lit: number }) {
+// -- Real values, from the trace -----------------------------------------------------
+
+const BG = [18, 21, 28];
+const POS = [240, 86, 159];
+const NEG = [95, 180, 255];
+
+/** Paints values onto a canvas texture: pink for positive, blue for negative, dark near zero. */
+function paintTexture(width: number, height: number, at: (x: number, y: number) => number, scale: number) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+  const image = ctx.createImageData(width, height);
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      const t = Math.max(-1, Math.min(1, at(x, y) / (scale || 1)));
+      const colour = t >= 0 ? POS : NEG;
+      const a = Math.pow(Math.abs(t), 0.7);
+      const o = (y * width + x) * 4;
+      for (let k = 0; k < 3; k++) image.data[o + k] = BG[k] + (colour[k] - BG[k]) * a;
+      image.data[o + 3] = 255;
+    }
+  ctx.putImageData(image, 0, 0);
+  const texture = new CanvasTexture(canvas);
+  texture.magFilter = NearestFilter;
+  return texture;
+}
+
+const maxAbs = (data: Float32Array) => {
+  let m = 0;
+  for (let i = 0; i < data.length; i++) m = Math.max(m, Math.abs(data[i]));
+  return m;
+};
+
+/** One channel of a [H, W, C] layer (tf's layout), or how strongly all channels fire when channel is -1. */
+function mapTexture(layer: TracedLayer, channel: number) {
+  const [h, w, c] = layer.shape;
+  const d = layer.data;
+  if (channel >= 0) return paintTexture(w, h, (x, y) => d[(y * w + x) * c + channel], maxAbs(d));
+  const energy = new Float32Array(h * w);
+  for (let p = 0; p < h * w; p++) {
+    let sum = 0;
+    for (let k = 0; k < c; k++) sum += Math.abs(d[p * c + k]);
+    energy[p] = sum / c;
+  }
+  return paintTexture(w, h, (x, y) => energy[y * w + x], maxAbs(energy));
+}
+
+/** A picture of any layer's output for the floating panel: a mosaic of channels, a token-by-feature grid, or a vector folded square. */
+function panelTexture(layer: TracedLayer) {
+  const { shape, data } = layer;
+  if (layer.attention) {
+    const [, q, k] = layer.attention.shape;
+    return paintTexture(k, q, (x, y) => layer.attention!.data[y * k + x], 1);
+  }
+  if (shape.length === 3) {
+    const [h, w, c] = shape;
+    const n = Math.min(16, c);
+    const cols = Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n / cols);
+    const scale = maxAbs(data);
+    return paintTexture(cols * (w + 1), rows * (h + 1), (x, y) => {
+      const k = Math.floor(y / (h + 1)) * cols + Math.floor(x / (w + 1));
+      const [px, py] = [x % (w + 1), y % (h + 1)];
+      return k >= n || px === w || py === h ? 0 : data[(py * w + px) * c + k];
+    }, scale);
+  }
+  if (shape.length === 2) {
+    const [rows, d] = shape;
+    const cols = Math.min(d, 128);
+    return paintTexture(cols, Math.min(rows, 64), (x, y) => data[y * d + x], maxAbs(data));
+  }
+  const n = Math.min(data.length, 1024);
+  const side = Math.ceil(Math.sqrt(n));
+  return paintTexture(side, side, (x, y) => (y * side + x < n ? data[y * side + x] : 0), maxAbs(data.subarray(0, n)));
+}
+
+/** The values of the layer the trace is on, floating above its stage. */
+function ValuePanel({ layer, height, label }: { layer: TracedLayer; height: number; label: string }) {
+  const texture = useMemo(() => panelTexture(layer), [layer]);
+  const image = texture.image as HTMLCanvasElement;
+  const aspect = image.width / image.height;
+  const h = Math.min(1.8, 3 / Math.max(aspect, 0.6));
+  const w = h * aspect;
+  return (
+    <Billboard position={[0, height + 1.1 + h / 2, 0]}>
+      <mesh position={[0, 0, -0.01]}>
+        <planeGeometry args={[w + 0.16, h + 0.16]} />
+        <meshBasicMaterial color="#f0569f" />
+      </mesh>
+      <mesh>
+        <planeGeometry args={[w, h]} />
+        <meshBasicMaterial map={texture} />
+      </mesh>
+      <Text position={[0, h / 2 + 0.2, 0]} fontSize={0.2} color="#eef0f5" anchorX="center" anchorY="bottom" outlineWidth={0.012} outlineColor="#0b0d12">
+        {label}
+      </Text>
+    </Billboard>
+  );
+}
+
+function Maps({ stage, lit, value }: { stage: Stage; lit: number; value?: TracedLayer }) {
   const [depth, side] = [stage.size[0], stage.size[1]];
   const slices = Math.max(2, Math.min(14, Math.round(log(stage.shape[0]) * 1.6)));
-  const texture = useMemo(() => gridTexture(stage.colour, Math.max(2, Math.min(12, Math.round(log(stage.shape[1]) * 1.6)))), [stage.colour, stage.shape]);
+  const grid = useMemo(() => gridTexture(stage.colour, Math.max(2, Math.min(12, Math.round(log(stage.shape[1]) * 1.6)))), [stage.colour, stage.shape]);
+  // With a trace, the slices show real channels and the front one how strongly the whole layer fires.
+  const real = useMemo(() => (value && value.shape.length === 3 ? Array.from({ length: slices }, (_, i) => mapTexture(value, i === slices - 1 ? -1 : Math.floor((i / slices) * value.shape[2]))) : null), [value, slices]);
   return (
     <group>
       {Array.from({ length: slices }, (_, i) => (
         <mesh key={i} position={[-depth / 2 + (i / Math.max(1, slices - 1)) * depth, side / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
           <planeGeometry args={[side, side]} />
-          <meshStandardMaterial map={texture} transparent opacity={0.28 + 0.5 * lit + (i === slices - 1 ? 0.25 : 0)} side={DoubleSide} emissive={new Color(stage.colour)} emissiveIntensity={0.15 + lit * 0.9} depthWrite={false} />
+          {real ? (
+            <meshBasicMaterial map={real[i]} transparent opacity={i === slices - 1 ? 1 : 0.55 + 0.3 * lit} side={DoubleSide} depthWrite={false} />
+          ) : (
+            <meshStandardMaterial map={grid} transparent opacity={0.28 + 0.5 * lit + (i === slices - 1 ? 0.25 : 0)} side={DoubleSide} emissive={new Color(stage.colour)} emissiveIntensity={0.15 + lit * 0.9} depthWrite={false} />
+          )}
         </mesh>
       ))}
     </group>
@@ -188,7 +298,7 @@ function inGroup(model: Model, groupId: string | undefined, target: string): boo
 }
 
 /** One stage: the tensor, its labels, and how bright the forward pass has made it. */
-function StageView({ stage, index, model, selected, onSelect, pass }: { stage: Stage; index: number; model: Model; selected: boolean; onSelect: () => void; pass: React.RefObject<number> }) {
+function StageView({ stage, index, model, selected, onSelect, pass, value, focus }: { stage: Stage; index: number; model: Model; selected: boolean; onSelect: (shift: boolean) => void; pass: React.RefObject<number>; value?: TracedLayer; focus?: { layer: TracedLayer; label: string } }) {
   const group = useRef<Group>(null);
   const [lit, setLit] = useState(0);
   useFrame(() => {
@@ -219,19 +329,20 @@ function StageView({ stage, index, model, selected, onSelect, pass }: { stage: S
       position={[stage.x, 0, stage.z]}
       onClick={(event) => {
         event.stopPropagation();
-        onSelect();
+        onSelect(event.shiftKey);
       }}
     >
-      {stage.form === "maps" && <Maps stage={stage} lit={lit} />}
+      {stage.form === "maps" && <Maps stage={stage} lit={lit} value={value} />}
       {stage.form === "vector" && <Neurons stage={stage} lit={lit} />}
       {stage.form === "tokens" && <Tokens stage={stage} lit={lit} attention={attention} experts={experts} topk={topk} />}
       {stage.form === "block" && <BlockStage stage={stage} lit={lit} residual={residual} />}
-      {selected && (
+      {(selected || focus) && (
         <mesh position={[0, height / 2, 0]}>
           <boxGeometry args={[stage.size[0] + 0.25, height + 0.25, stage.size[2] + 0.25]} />
           <meshBasicMaterial color="#f0569f" wireframe />
         </mesh>
       )}
+      {focus && <ValuePanel layer={focus.layer} height={height + (attention ? 1 : 0)} label={focus.label} />}
       <Billboard position={[0, height + (attention ? 1.4 : 0.45), 0]}>
         <Text fontSize={0.26} color="#eef0f5" anchorX="center" anchorY="bottom" outlineWidth={0.015} outlineColor="#0b0d12" maxWidth={4}>
           {title}
@@ -316,10 +427,27 @@ function FitCamera({ length, closer = false }: { length: number; closer?: boolea
   return null;
 }
 
-function Scene({ display, slot, model, compact }: { display: Display; slot: SlotIndex; model: Model; compact: boolean }) {
+function Scene({ display, slot, model, compact, trace }: { display: Display; slot: SlotIndex; model: Model; compact: boolean; trace: boolean }) {
   const selection = useLab((state) => state.selection);
+  const focus = useTraceShared((state) => (trace ? state.focus[slot] : null));
+  const values = useTraceShared((state) => (trace ? state.values[slot] : null));
+  const follow = useRef<number | null>(null);
   const select = useLab((state) => state.select);
+  const edit = useLab((state) => state.edit);
   const pass = useRef(0);
+  // Shift-click wires the selected layer into the clicked one, as dragging between dots does in 2D.
+  const pick = (id: string, shift: boolean) => {
+    if (shift && selection?.slot === slot && selection.id !== id) {
+      const from = selection.id;
+      edit(slot, (current) => {
+        const source = connectionEnd(current, from, "source");
+        const target = connectionEnd(current, id, "target");
+        return source && target ? connect(current, source, target) : current;
+      });
+      return;
+    }
+    select({ slot, id });
+  };
   const reduced = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const { stages, links, frames, length } = useMemo(() => {
@@ -399,7 +527,40 @@ function Scene({ display, slot, model, compact }: { display: Display; slot: Slot
     return { stages, links, frames, length: x + 2 };
   }, [display, model.kind]);
 
-  useFrame((_, delta) => {
+  // Which stage shows the traced layer: its own, the block holding it, or the stage it rides on as a tag.
+  const focusIndex = useMemo(() => {
+    if (!focus) return -1;
+    const node = model.nodes.find((item) => item.id === focus.nodeId);
+    const direct = stages.findIndex((stage) => stage.item.id === focus.nodeId || (stage.item.kind === "block" && inGroup(model, node?.group, stage.item.id)));
+    if (direct >= 0) return direct;
+    // Activations and norms ride on the stage of the layer they read from.
+    let source = node?.inputs[0];
+    while (source) {
+      const index = stages.findIndex((stage) => stage.item.id === source);
+      if (index >= 0) return index;
+      source = model.nodes.find((item) => item.id === source)?.inputs[0];
+    }
+    return -1;
+  }, [focus, stages, model]);
+
+  useEffect(() => {
+    follow.current = focusIndex >= 0 ? stages[focusIndex].x : null;
+  }, [focusIndex, stages]);
+
+  useFrame((state, delta) => {
+    if (trace) {
+      // The pulse sits on the traced layer, and the camera glides along to it.
+      if (focusIndex >= 0) pass.current += (focusIndex - pass.current) * Math.min(1, delta * 6);
+      const controls = state.controls as unknown as { target: Vector3; update: () => void } | null;
+      if (controls && follow.current !== null) {
+        const dx = (follow.current - controls.target.x) * Math.min(1, delta * 3);
+        controls.target.x += dx;
+        state.camera.position.x += dx;
+        controls.update();
+        if (Math.abs(follow.current - controls.target.x) < 0.01) follow.current = null;
+      }
+      return;
+    }
     if (!reduced) pass.current = (pass.current + delta * 1.6) % (stages.length + 3);
   });
 
@@ -445,14 +606,24 @@ function Scene({ display, slot, model, compact }: { display: Display; slot: Slot
       ))}
       <FitCamera length={length} closer={compact} />
       {stages.map((stage, index) => (
-        <StageView key={stage.item.id} stage={stage} index={index} model={model} pass={pass} selected={selection?.slot === slot && selection.id === stage.item.id} onSelect={() => select({ slot, id: stage.item.id })} />
+        <StageView
+          key={stage.item.id}
+          stage={stage}
+          index={index}
+          model={model}
+          pass={pass}
+          selected={selection?.slot === slot && selection.id === stage.item.id}
+          onSelect={(shift) => pick(stage.item.id, shift)}
+          value={values?.get(stage.item.id)}
+          focus={index === focusIndex && focus ? { layer: focus.layer, label: `${model.nodes.find((item) => item.id === focus.nodeId)?.label ?? focus.layer.nodeId}${focus.copy ? ` (copy ${focus.copy + 1})` : ""}` } : undefined}
+        />
       ))}
       <OrbitControls makeDefault enableDamping target={[length / 2, 1, 0]} maxPolarAngle={Math.PI / 1.9} />
     </>
   );
 }
 
-export default function Graph3D({ slot, compact = false }: { slot: SlotIndex; compact?: boolean }) {
+export default function Graph3D({ slot, compact = false, trace = false }: { slot: SlotIndex; compact?: boolean; trace?: boolean }) {
   const data = useLab((state) => state.slots[slot]);
   const status = useLab((state) => state.diff?.status[slot]);
   const select = useLab((state) => state.select);
@@ -473,14 +644,17 @@ export default function Graph3D({ slot, compact = false }: { slot: SlotIndex; co
   return (
     <div className="relative h-full w-full">
       <Canvas dpr={[1, 2]} camera={{ position: [0, 6, 14], fov: 42, near: 0.05, far: 400 }} onPointerMissed={() => select(null)}>
-        <Scene display={display} slot={slot} model={data.model} compact={compact} />
+        <Scene display={display} slot={slot} model={data.model} compact={compact} trace={trace} />
       </Canvas>
-      {!compact && <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-line bg-surface/85 px-3 py-2 text-[11.5px] leading-relaxed text-muted backdrop-blur">
+      {!compact && !trace && <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-line bg-surface/85 px-3 py-2 text-[11.5px] leading-relaxed text-muted backdrop-blur">
         <p>
           <span className="text-ink">Feature maps</span> stack by channels · <span className="text-[#f0569f]">cones</span> are convolution kernels · <span className="text-ink">dots</span> are neurons
         </p>
         <p>
           <span className="text-ink">Bars</span> are token vectors, arcs are attention · <span className="text-[#f0569f]">dashed arcs</span> are skip connections · drag to orbit, scroll to zoom
+        </p>
+        <p>
+          Click a layer, then <span className="text-ink">shift-click</span> another to connect the first into it
         </p>
       </div>}
     </div>

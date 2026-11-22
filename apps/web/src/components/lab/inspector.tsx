@@ -47,7 +47,14 @@ export default function Inspector() {
       <div className="p-4 text-[13px] leading-relaxed text-muted">
         <p className="font-medium text-ink">Nothing selected</p>
         <p className="mt-1">Click a layer or block to see its shapes, parameters and compute, and to change its settings.</p>
-        {data === null && <p className="mt-3">Turn on <span className="text-ink">Edit</span> to drag in new layers and rewire connections.</p>}
+        {data === null && (
+          <>
+            <p className="mt-3">
+              <span className="text-ink">Connect layers</span> by dragging from the dot under one layer to another. Into a layer that already has an input, it adds a skip: an add when shapes match, a concat when only channels differ. In 3D, click a layer, then shift-click another.
+            </p>
+            <p className="mt-3">Turn on <span className="text-ink">Edit</span> to drag in new layers from the palette. Ctrl/⌘ Z undoes anything.</p>
+          </>
+        )}
         {slots.map((slot, index) => {
           const paper = slot && CATALOG.find((entry) => entry.name === slot.origin)?.paper;
           if (!paper) return null;

@@ -5,7 +5,7 @@ import { ChevronDown, ChevronRight, TriangleExclamationPoint } from "lucide-reac
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCount, type ChangeKind } from "tessera-engine";
 import { buildDisplay, CATEGORY_COLOURS, formatShape, type Display, type DisplayNode } from "@/lib/display";
-import { addNode, connect, disconnect, removeNode } from "@/lib/edit";
+import { addNode, connect, connectionEnd, disconnect, removeNode } from "@/lib/edit";
 import { useLab, type SlotIndex } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -23,14 +23,14 @@ function LayerNode({ data, selected }: NodeProps<Node<Data>>) {
   return (
     <div
       className={cn(
-        "relative flex h-[58px] w-[210px] items-stretch overflow-hidden rounded-lg border border-line bg-surface text-left shadow-sm",
+        "group relative flex h-[58px] w-[210px] items-stretch rounded-lg border border-line bg-surface text-left shadow-sm",
         data.status && STATUS_RING[data.status],
         selected && "border-accent",
         data.error && "border-danger",
       )}
     >
-      <Handle type="target" position={Position.Top} className={cn("!h-2 !w-2 !border-0 !bg-muted", !data.editing && "!opacity-0")} />
-      <span className="w-1.5 flex-none" style={{ background: colour }} />
+      <Handle type="target" position={Position.Top} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
+      <span className="w-1.5 flex-none rounded-l-lg" style={{ background: colour }} />
       <div className="min-w-0 flex-1 px-2.5 py-1.5">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[12.5px] font-medium">{data.label}</span>
@@ -41,7 +41,7 @@ function LayerNode({ data, selected }: NodeProps<Node<Data>>) {
           {data.params > 0 && <span className="flex-none">{formatCount(data.params)}</span>}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className={cn("!h-2 !w-2 !border-0 !bg-muted", !data.editing && "!opacity-0")} />
+      <Handle type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
     </div>
   );
 }
@@ -51,12 +51,12 @@ function BlockNode({ data, selected }: NodeProps<Node<Data>>) {
   return (
     <div
       className={cn(
-        "relative flex h-[66px] w-[230px] items-center gap-2 rounded-xl border border-line bg-surface-2 px-3 text-left",
+        "group relative flex h-[66px] w-[230px] items-center gap-2 rounded-xl border border-line bg-surface-2 px-3 text-left",
         data.status && STATUS_RING[data.status],
         selected && "border-accent",
       )}
     >
-      <Handle type="target" position={Position.Top} className="!h-2 !w-2 !border-0 !bg-muted !opacity-0" />
+      <Handle type="target" position={Position.Top} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
       <button type="button" onClick={() => toggle(data.slot, data.id)} className="grid size-7 flex-none place-items-center rounded-md border border-line bg-surface text-muted hover:text-ink" aria-label="Open block">
         <ChevronRight className="size-4" />
       </button>
@@ -73,7 +73,7 @@ function BlockNode({ data, selected }: NodeProps<Node<Data>>) {
         </div>
       </div>
       {data.error && <TriangleExclamationPoint className="size-3.5 flex-none text-danger" />}
-      <Handle type="source" position={Position.Bottom} className="!h-2 !w-2 !border-0 !bg-muted !opacity-0" />
+      <Handle type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-surface !bg-accent opacity-0 transition-opacity group-hover:opacity-100" />
     </div>
   );
 }
@@ -150,7 +150,8 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
         ...(item.parent ? { parentId: item.parent, extent: "parent" as const } : {}),
         ...(item.open ? { style: { width: item.width, height: item.height }, selectable: false, zIndex: -1 } : {}),
         draggable: !item.open,
-        connectable: editing && item.kind === "node",
+        // Any layer or closed block can be wired by dragging from its bottom dot; Undo takes it back.
+        connectable: !item.open,
         data: { ...item, slot, editing, shapeText: data ? formatShape(item.shape, data.model) : "" },
       })),
     [display, slot, editing, data],
@@ -215,7 +216,8 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
         nodeTypes={nodeTypes}
         minZoom={0.05}
         maxZoom={2}
-        nodesConnectable={editing}
+        nodesConnectable
+        connectionRadius={36}
         deleteKeyCode={editing ? ["Backspace", "Delete"] : null}
         proOptions={{ hideAttribution: true }}
         onNodeClick={(_, node) => select({ slot, id: node.id })}
@@ -224,9 +226,13 @@ export default function Graph2D({ slot }: { slot: SlotIndex }) {
         }}
         onPaneClick={() => select(null)}
         onConnect={(connection) => {
-          if (connection.source && connection.target && realIds.has(connection.source) && realIds.has(connection.target)) edit(slot, (model) => connect(model, connection.source, connection.target));
+          edit(slot, (model) => {
+            const source = connectionEnd(model, connection.source, "source");
+            const target = connectionEnd(model, connection.target, "target");
+            return source && target ? connect(model, source, target) : model;
+          });
         }}
-        isValidConnection={(connection) => realIds.has(connection.source) && realIds.has(connection.target)}
+        isValidConnection={(connection) => connection.source !== connection.target}
         onNodesDelete={(deleted) => edit(slot, (model) => deleted.filter((node) => realIds.has(node.id)).reduce((m, node) => removeNode(m, node.id), model))}
         onEdgesDelete={(deleted) => edit(slot, (model) => deleted.reduce((m, edge) => disconnect(m, edge.source, edge.target), model))}
       >
