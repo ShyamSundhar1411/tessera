@@ -323,27 +323,48 @@ function Scene({ display, slot, model, compact }: { display: Display; slot: Slot
   const reduced = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const { stages, links, frames, length } = useMemo(() => {
-    const ordered = display.nodes.filter((item) => !item.open).sort((a, b) => a.depth - b.depth);
+    const ordered = display.nodes.filter((item) => !item.open).sort((a, b) => a.ay - b.ay || a.depth - b.depth);
     const stages: Stage[] = [];
     const owner = new Map<string, Stage>();
-    // Lateral position from the 2D layout keeps side branches beside the main path.
+    const inputOf = new Map<string, string>();
+    for (const edge of display.edges) if (!inputOf.has(edge.target)) inputOf.set(edge.target, edge.source);
+    // Sideways position from the 2D layout keeps parallel branches (an encoder beside a decoder, a ResNet shortcut) side by side.
     const xs = ordered.map((item) => item.ax + item.width / 2);
     const centre = xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : 0;
-    let x = 0;
+    // Shape-keeping layers (activations, norms) ride on the stage they read from.
+    const major: DisplayNode[] = [];
     for (const item of ordered) {
-      const previous = stages[stages.length - 1];
-      if (MINOR.has(item.category) && previous && item.shape.join() === previous.shape.join()) {
-        previous.tags.push(item.op ?? item.label);
-        owner.set(item.id, previous);
+      const source = inputOf.get(item.id);
+      const host = source ? owner.get(source) : undefined;
+      if (MINOR.has(item.category) && host && item.shape.join() === host.shape.join()) {
+        host.tags.push(item.op ?? item.label);
+        owner.set(item.id, host);
         continue;
       }
+      major.push(item);
       const form = formOf(item, model.kind === "language");
-      const size = sizeOf(form, item.shape);
-      x += (previous ? previous.size[0] / 2 : 0) + GAP + size[0] / 2;
-      const stage: Stage = { item, form, shape: item.shape, size, x, z: ((item.ax + item.width / 2 - centre) / 240) * 2.2, tags: [], colour: CATEGORY_COLOURS[item.category] };
+      const stage: Stage = { item, form, shape: item.shape, size: sizeOf(form, item.shape), x: 0, z: ((item.ax + item.width / 2 - centre) / 240) * 3.8, tags: [], colour: CATEGORY_COLOURS[item.category] };
       stages.push(stage);
       owner.set(item.id, stage);
     }
+    // Stages at the same level of the layout share a position along the flow.
+    const levels: Stage[][] = [];
+    for (const stage of stages) {
+      const level = levels.find((row) => Math.abs(row[0].item.ay - stage.item.ay) < 12);
+      if (level) level.push(stage);
+      else levels.push([stage]);
+    }
+    levels.sort((a, b) => a[0].item.ay - b[0].item.ay);
+    let x = 0;
+    let previousWidth = 0;
+    for (const level of levels) {
+      const width = Math.max(...level.map((stage) => stage.size[0]));
+      x += previousWidth / 2 + GAP + width / 2;
+      for (const stage of level) stage.x = x;
+      previousWidth = width;
+    }
+    stages.sort((a, b) => a.x - b.x);
+    void major;
     const links: { from: Stage; to: Stage; skip: boolean }[] = [];
     const seen = new Set<string>();
     for (const edge of display.edges) {
