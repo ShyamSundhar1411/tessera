@@ -811,3 +811,40 @@ function mixtureOfExperts(x: tf.Tensor, w: Weights, a: NodeArgs): tf.Tensor {
   }
   return tf.reshape(out, shape);
 }
+
+// -- Tracing into plain arrays -------------------------------------------------------
+
+export interface TracedLayer {
+  key: string;
+  nodeId: string;
+  copy: number;
+  /** tf's layout without the batch: [H, W, C] for images, [seq, features] for sequences. */
+  shape: number[];
+  data: Float32Array;
+  /** Attention weights [heads, query, key], for attention layers. */
+  attention?: { shape: number[]; data: Float32Array };
+}
+
+/** One example, without its batch dimension. Int32Array data feeds token ids, Float32Array feeds values. */
+export type PlainFeed = { data: Float32Array | Int32Array; shape: number[] };
+
+/** Runs trace() on one example and copies every layer out of tf, so nothing needs disposing afterwards. */
+export function traceArrays(graph: GraphModel, feeds: Record<string, PlainFeed>): TracedLayer[] {
+  const tensors: Record<string, tf.Tensor> = {};
+  for (const [id, feed] of Object.entries(feeds)) tensors[id] = tf.tensor(feed.data, [1, ...feed.shape], feed.data instanceof Int32Array ? "int32" : "float32");
+  let steps: TraceStep[] = [];
+  try {
+    steps = graph.trace(tensors);
+    return steps.map((step) => ({
+      key: step.key,
+      nodeId: step.nodeId,
+      copy: step.copy,
+      shape: step.value.shape.slice(1),
+      data: Float32Array.from(step.value.dataSync()),
+      attention: step.attention ? { shape: step.attention.shape.slice(1), data: Float32Array.from(step.attention.dataSync()) } : undefined,
+    }));
+  } finally {
+    disposeTrace(steps);
+    for (const tensor of Object.values(tensors)) tensor.dispose();
+  }
+}

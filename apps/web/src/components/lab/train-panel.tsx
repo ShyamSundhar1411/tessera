@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatCount, type Model } from "tessera-engine";
 import type { AnyTrainEvent, AnyTrainResult, DatasetName, Evaluation, MetricComparison, TaskSpec } from "tessera-lab";
 import { useLab } from "@/lib/store";
+import { useTrained } from "@/lib/trained";
 import { cn } from "@/lib/utils";
 import { BandChart, Confusion } from "./chart";
 
@@ -41,6 +42,7 @@ export default function TrainPanel() {
   const [error, setError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   const models: Model[] = slots.filter(Boolean).map((slot) => slot!.model);
+  const slotOf = ([0, 1] as const).filter((index) => slots[index]);
 
   // Work out what these models can learn, and how they would be shrunk to train here.
   useEffect(() => {
@@ -97,6 +99,11 @@ export default function TrainPanel() {
           trainExamples: examples,
           testExamples: Math.max(128, Math.round(examples / 8)),
           ...(dataset ? { prepare: { imageDataset: dataset } } : {}),
+          // The first seed's weights stay alive for the trace view; the rest are freed.
+          keepTrained: ({ modelIndex, run, graph, prepared }) => {
+            if (run === 0) useTrained.getState().keep(slotOf[modelIndex], { source: models[modelIndex], graph, prepared });
+            else graph.dispose();
+          },
         },
         (event: AnyTrainEvent) => {
           state.status = `${models[event.modelIndex].name} · seed ${event.seed} · epoch ${event.epoch}/${epochs} · batch ${event.batch}/${event.batches} · loss ${event.loss.toFixed(3)}`;

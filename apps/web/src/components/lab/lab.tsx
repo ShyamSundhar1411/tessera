@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, Box, Pencil, Plus, Undo2, X } from "lucide-react";
+import { ArrowLeftRight, Box, Pencil, Plus, Sigma, Undo2, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -20,6 +20,14 @@ import TrainPanel from "./train-panel";
 
 // three.js only runs in the browser.
 const Graph3D = dynamic(() => import("./graph-3d"), { ssr: false, loading: () => <div className="grid h-full place-items-center text-[13px] text-muted">Loading 3D…</div> });
+
+const TraceView = dynamic(() => import("./trace-view"), { ssr: false, loading: () => <div className="grid h-full place-items-center text-[13px] text-muted">Loading the trace…</div> });
+
+const VIEWS = [
+  { id: "2d", label: "2D" },
+  { id: "3d", label: "3D" },
+  { id: "trace", label: "Trace" },
+] as const;
 
 const PANELS: { id: PanelName; label: string }[] = [
   { id: "inspect", label: "Inspect" },
@@ -75,7 +83,8 @@ export default function Lab() {
       const entry = CATALOG.find((item) => item.id === query.get(key));
       if (entry) load(index as SlotIndex, entry.build(), entry.name);
     });
-    if (query.get("view") === "3d") setView("3d");
+    const view = query.get("view");
+    if (view === "3d" || view === "trace") setView(view);
   }, [setView]);
 
   useEffect(() => {
@@ -120,10 +129,11 @@ export default function Lab() {
             <Undo2 className="size-3.5" />
           </button>
           <div className="flex rounded-lg border border-line p-0.5 text-[12.5px]">
-            {(["2d", "3d"] as const).map((item) => (
-              <button key={item} type="button" onClick={() => setView(item)} aria-pressed={view === item} className={cn("flex items-center gap-1 rounded-md px-2 py-0.5 text-muted", view === item && "bg-surface-3 text-ink")}>
-                {item === "3d" && <Box className="size-3.5" />}
-                {item.toUpperCase()}
+            {VIEWS.map((item) => (
+              <button key={item.id} type="button" onClick={() => setView(item.id)} aria-pressed={view === item.id} className={cn("flex items-center gap-1 rounded-md px-2 py-0.5 text-muted", view === item.id && "bg-surface-3 text-ink")}>
+                {item.id === "3d" && <Box className="size-3.5" />}
+                {item.id === "trace" && <Sigma className="size-3.5" />}
+                {item.label}
               </button>
             ))}
           </div>
@@ -136,8 +146,9 @@ export default function Lab() {
             <Palette />
           </div>
         )}
-        <main className={cn("grid min-h-0 min-w-0 flex-1", shown.length === 2 && "grid-rows-2 md:grid-cols-2 md:grid-rows-1")}>
-          {shown.map((index) => (
+        <main className={cn("grid min-h-0 min-w-0 flex-1", shown.length === 2 && view !== "trace" && "grid-rows-2 md:grid-cols-2 md:grid-rows-1")}>
+          {view === "trace" && shown.length > 0 && <TraceView />}
+          {view !== "trace" && shown.map((index) => (
             <section key={index} className={cn("flex min-h-0 flex-col", index === 1 && "border-t border-line md:border-t-0 md:border-l")}>
               <SlotHeader slot={index} onLoad={() => setDialog(index)} />
               <div className="min-h-0 flex-1">

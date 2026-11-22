@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as tf from "@tensorflow/tfjs";
 import { analyze, Builder, CATALOG, catalogModel, shrinkLanguageModel, type ArgValue, type Model } from "tessera-engine";
-import { buildGraph, type GraphModel } from "./graph";
+import { buildGraph, disposeTrace, traceArrays, type GraphModel } from "./graph";
 import { prepareForTraining } from "./tasks";
 
 await tf.setBackend("cpu");
@@ -206,25 +206,33 @@ describe("initialisation", () => {
   });
 });
 
-import { describe as describeTrace, expect as expectTrace, test as testTrace } from "bun:test";
-import { catalogModel as catalogTrace, shrinkLanguageModel as shrinkTrace } from "tessera-engine";
-import { buildGraph as buildTrace, disposeTrace } from "./graph";
-import * as tfTrace from "@tensorflow/tfjs";
-
-describeTrace("trace", () => {
-  testTrace("keeps every step's output and the attention weights", () => {
-    const model = shrinkTrace(catalogTrace("gpt2")!, { dim: 32, layers: 2, heads: 2, vocab: 20, seqLen: 8 });
-    const graph = buildTrace(model, { seed: 1 });
+describe("trace", () => {
+  test("keeps every step's output and the attention weights", () => {
+    const model = shrinkLanguageModel(catalogModel("gpt2")!, { dim: 32, layers: 2, heads: 2, vocab: 20, seqLen: 8 });
+    const graph = buildGraph(model, { seed: 1 });
     const input = graph.inputs[0].id;
-    const steps = graph.trace({ [input]: tfTrace.tensor2d([[1, 2, 3, 4, 5, 6, 7, 8]], [1, 8], "int32") });
+    const steps = graph.trace({ [input]: tf.tensor2d([[1, 2, 3, 4, 5, 6, 7, 8]], [1, 8], "int32") });
     const attention = steps.filter((step) => step.attention);
-    expectTrace(attention.length).toBe(2);
-    expectTrace(attention[0].attention!.shape).toEqual([1, 2, 8, 8]);
+    expect(attention.length).toBe(2);
+    expect(attention[0].attention!.shape).toEqual([1, 2, 8, 8]);
     // Causal: the first query attends only to itself.
     const first = attention[0].attention!.arraySync() as number[][][][];
-    expectTrace(first[0][0][0][0]).toBeCloseTo(1, 5);
-    expectTrace(steps[steps.length - 1].value.shape).toEqual([1, 8, 20]);
+    expect(first[0][0][0][0]).toBeCloseTo(1, 5);
+    expect(steps[steps.length - 1].value.shape).toEqual([1, 8, 20]);
     disposeTrace(steps);
+    graph.dispose();
+  });
+
+  test("copies a traced pass into plain arrays and frees the tensors", () => {
+    const model = shrinkLanguageModel(catalogModel("gpt2")!, { dim: 32, layers: 2, heads: 2, vocab: 20, seqLen: 8 });
+    const graph = buildGraph(model, { seed: 1 });
+    const before = tf.memory().numTensors;
+    const layers = traceArrays(graph, { [graph.inputs[0].id]: { data: Int32Array.from([1, 2, 3, 4, 5, 6, 7, 8]), shape: [8] } });
+    expect(tf.memory().numTensors).toBe(before);
+    const last = layers[layers.length - 1];
+    expect(last.shape).toEqual([8, 20]);
+    expect(last.data.length).toBe(160);
+    expect(layers.find((layer) => layer.attention)!.attention!.shape).toEqual([2, 8, 8]);
     graph.dispose();
   });
 });
